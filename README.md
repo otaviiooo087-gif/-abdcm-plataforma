@@ -1,23 +1,41 @@
 # ABDCM — Plataforma de Ação Coletiva
 
-Fase 0 (fundação) da plataforma de gestão de ação coletiva da ABDCM.
-A especificação completa está em [`docs/PROMPT-ABDCM-COMPLETO.md`](docs/PROMPT-ABDCM-COMPLETO.md);
-o resumo operacional, em [`CLAUDE.md`](CLAUDE.md).
+Fase 0 (fundação) da plataforma de gestão de ação coletiva da ABDCM, com persistência real em
+Postgres. A especificação completa está em
+[`docs/PROMPT-ABDCM-COMPLETO.md`](docs/PROMPT-ABDCM-COMPLETO.md); o resumo operacional, em
+[`CLAUDE.md`](CLAUDE.md).
 
 ## Como rodar
 
+Precisa de um Postgres — local (Docker ou instalação nativa) ou hospedado (Supabase, Vercel
+Postgres). Qualquer um serve, é conexão Postgres padrão.
+
 ```bash
 npm install
-npm run dev        # gera o .env.local automaticamente e sobe em http://localhost:3000
+npm run setup                                  # gera .env.local com um SESSION_SECRET aleatório
+
+# edite .env.local e preencha DATABASE_URL, então:
+npm run db:migrate                             # cria as tabelas (só na primeira vez)
+npm run db:seed                                # popula com dados fictícios de demonstração
+
+npm run dev                                    # sobe em http://localhost:3000
 ```
 
-Não é preciso banco, conta de Supabase nem nenhum serviço externo: esta fase roda com um
-repositório em memória, semeado com dados de demonstração a cada boot.
+Sem Postgres à mão? O caminho mais rápido é Docker:
+
+```bash
+docker run -d --name abdcm-db -e POSTGRES_PASSWORD=abdcm -e POSTGRES_DB=abdcm -p 5432:5432 postgres:16
+# DATABASE_URL=postgresql://postgres:abdcm@localhost:5432/abdcm
+```
+
+Nenhuma integração externa além do banco é necessária: PIX, WhatsApp e assinatura eletrônica
+ainda não têm provider real — os adaptadores existem, mas a Fase 1 é quem os implementa.
 
 ### Contas de demonstração
 
-Senha de todas: `abdcm2026` (definível por `DEMO_PASSWORD`; é semente local, não credencial
-de sistema real — o hash é gerado em tempo de execução e nunca versionado).
+Senha de todas: `abdcm2026` (definível por `DEMO_PASSWORD` antes de rodar `npm run db:seed`; é
+semente local, não credencial de sistema real — o hash é gerado em tempo de execução e nunca
+versionado).
 
 | E-mail | Papel | Onde entra |
 |---|---|---|
@@ -34,11 +52,12 @@ impersonação rastreada ("Ver como parceiro"), com banner permanente e registro
 ## Verificação
 
 ```bash
-npm test          # 133 testes de domínio (Vitest)
+npm test          # 133 testes de domínio (Vitest) — não tocam o banco
 npm run typecheck # TypeScript strict, sem erros
 npm run build     # build de produção
-npm run test:e2e  # 21 checks no navegador (exige o servidor rodando e, na primeira vez,
-                  # o navegador do Playwright: npx playwright install chromium)
+npm run test:e2e  # 21 checks no navegador contra o Postgres de verdade (exige o servidor
+                  # rodando e, na primeira vez, o navegador do Playwright:
+                  # npx playwright install chromium)
 ```
 
 Os testes de domínio cobrem as 11 transições válidas da máquina de estados, a **matriz completa
@@ -47,7 +66,17 @@ entre os 6 papéis e o mascaramento de CPF/CNPJ.
 
 Os checks de navegador cobrem o login dos 6 papéis, a recusa de senha errada com mensagem
 idêntica à de usuário inexistente, o bloqueio por papel em cada rota administrativa, a máscara de
-documento na listagem, a revelação auditada, a aprovação na conciliação e a consulta pública.
+documento na listagem, a revelação auditada, a aprovação na conciliação e a consulta pública —
+com escritas reais no banco: uma aprovação feita num boot do servidor continua lá depois de matar
+o processo e subir outro do zero (é exatamente o cenário de uma função serverless na Vercel).
+
+## Deploy (Vercel)
+
+Importe o repositório apontando **Root Directory** para `abdcm`, defina `SESSION_SECRET` e
+`DATABASE_URL` (Vercel Postgres resolve os dois com um clique em Storage → Create Database →
+Postgres, que já injeta `DATABASE_URL` no projeto) e rode `npm run db:migrate && npm run db:seed`
+uma vez, localmente, apontando para essa mesma `DATABASE_URL` de produção. Depois disso, todo
+`git push` na branch de produção publica sozinho.
 
 ## Roteiro sugerido de demonstração
 
@@ -72,14 +101,17 @@ documento na listagem, a revelação auditada, a aprovação na conciliação e 
 
 **Pronto:** os três frontends com layout e navegação, autenticação com sessão assinada no
 servidor, os 6 papéis com a matriz de permissões aplicada por rota, a máquina de estados como
-módulo de domínio puro com testes, o mascaramento e a revelação auditada de documentos, a fila de
-conciliação funcional, o preview de encerramento por gates, a timeline de `ProcessEvent`, a
-consulta pública com rate limiting e o schema SQL completo em `src/db/schema.sql`.
+módulo de domínio puro com testes, **persistência real em Postgres via Drizzle** (o mesmo dado
+sobrevive a reiniciar o servidor), o mascaramento e a revelação auditada de documentos, a fila de
+conciliação funcional gravando no banco, o preview de encerramento por gates, a timeline de
+`ProcessEvent` com trigger de imutabilidade no próprio banco, a consulta pública com rate
+limiting.
 
-**Ainda não:** persistência em Postgres (a aplicação roda em memória), integrações reais de PIX,
-WhatsApp e assinatura (os adaptadores estão especificados, os providers não foram escritos),
-importação de planilha, esteira de protocolo e retorno, ledger e o agente de IA. Tudo isso é
-Fase 1 em diante — ver as fases em `CLAUDE.md`.
+**Ainda não:** integrações reais de PIX, WhatsApp e assinatura (os adaptadores estão
+especificados, os providers não foram escritos), importação de planilha, esteira de protocolo e
+retorno, ledger e o agente de IA. Tudo isso é Fase 1 em diante — ver as fases em `CLAUDE.md`. A
+persistência foi antecipada da Fase 1 para a Fase 0 a pedido explícito, para viabilizar um deploy
+estável fora do `localhost`.
 
 ## Estrutura
 
@@ -88,7 +120,10 @@ src/
   domain/registros/state-machine.ts   ← máquina de estados, domínio puro, sem I/O
   domain/pagamentos/reason-codes.ts   ← listas fechadas de motivo (I11)
   lib/                                ← auth, authz, documento (máscara), money (centavos)
-  store/                              ← repositório em memória; único caminho de escrita de status
-  db/schema.sql                       ← schema Postgres completo, com triggers de imutabilidade
+  store/repo.ts                       ← camada de acesso ao Postgres; único caminho de escrita de status
+  db/
+    schema.ts                        ← tabelas Drizzle (as que a aplicação já consulta)
+    migrations/0001_schema_inicial.sql  ← schema Postgres completo, com triggers de imutabilidade
+    client.ts, migrate.ts, seed.ts   ← conexão, aplicador de migrations, dados de demonstração
   app/(login | app | admin | consulta)
 ```

@@ -332,6 +332,10 @@ fase: resumo do que foi feito, o que ficou de fora, e o que precisa ser decidido
   layout base dos três frontends.
   *Pronto quando:* migrations rodam do zero, testes da máquina de estados passam, login funciona com
   os 6 papéis.
+
+  > **Nota:** a persistência em Postgres via Drizzle (prevista para a Fase 1) foi antecipada ainda
+  > na Fase 0, a pedido explícito, para viabilizar um deploy estável fora do `localhost`. A
+  > aplicação já lê e escreve em Postgres de verdade — ver `src/db/` e `src/store/repo.ts`.
 - **FASE 1 — Núcleo operacional.** Filiação com assinatura (mock) · cadastro individual e importação
   de planilha com preview/dedup/relatório · console do lote com encerramento por gates · envio de
   lista com bloqueio · PIX automático + webhook + idempotência + reconciliação ativa · fila de

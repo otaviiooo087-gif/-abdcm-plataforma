@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { sessaoAtual } from '@/lib/auth'
 import { pode } from '@/lib/authz'
 import { formatarDocumento } from '@/lib/documento'
-import { auditar, banco, doTenant } from '@/store/repo'
+import { auditar, banco } from '@/store/repo'
 
 /**
  * Revelação de CPF/CNPJ (invariante I6).
@@ -27,11 +27,12 @@ export async function revelarDocumento(
     return { erro: 'Seu papel não tem permissão para revelar documento.' }
   }
 
-  const registro = doTenant(banco().registros, sessao.tenantId).find((r) => r.id === parsed.data)
+  const db = await banco(sessao.tenantId)
+  const registro = db.registros.find((r) => r.id === parsed.data)
   if (!registro) return { erro: 'Registro não encontrado neste tenant.' }
 
-  auditar({
-    tenantId: sessao.tenantId, atorUserId: sessao.userId, atorNome: sessao.nome,
+  await auditar({
+    tenantId: sessao.tenantId, atorUserId: sessao.userId,
     acao: 'documento.revelar_cpf', entidadeTipo: 'registro', entidadeId: registro.id,
     antes: null, depois: { revelado: true, associadoId: registro.associadoId }, ip: '127.0.0.1',
   })

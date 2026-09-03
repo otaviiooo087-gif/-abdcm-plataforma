@@ -12,7 +12,7 @@ function horasDesde(d: Date): number {
 
 export default async function PainelDoDia() {
   const sessao = await exigirSessao('admin.acessar')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
   const t = sessao.tenantId
 
   const registros = doTenant(db.registros, t)

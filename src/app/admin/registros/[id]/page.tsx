@@ -15,7 +15,7 @@ const dt = (d: Date) =>
 export default async function FichaRegistro({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const sessao = await exigirSessao('registro.ver')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
 
   const registro = doTenant(db.registros, sessao.tenantId).find((r) => r.id === id)
   if (!registro) notFound()
@@ -23,7 +23,7 @@ export default async function FichaRegistro({ params }: { params: Promise<{ id: 
   const associado = db.associados.find((a) => a.id === registro.associadoId)
   const parceiro = db.parceiros.find((p) => p.id === registro.parceiroId)
   const lote = db.lotes.find((l) => l.id === registro.loteId)
-  const eventos = eventosDoRegistro(registro.id)
+  const eventos = await eventosDoRegistro(registro.id)
 
   return (
     <div className="space-y-5">

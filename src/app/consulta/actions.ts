@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { STATUS_LABELS, type ProcessStatus } from '@/domain/registros/state-machine'
 import { apenasDigitos, validarDocumento } from '@/lib/documento'
-import { banco, eventosDoRegistro } from '@/store/repo'
+import { bancoTenantPadrao, eventosDoRegistro } from '@/store/repo'
 
 /**
  * Consulta pública: CPF/CNPJ + número do protocolo, sem login.
@@ -67,7 +67,7 @@ export async function consultar(_e: ResultadoConsulta, form: FormData): Promise<
     return { erro: 'Muitas consultas em pouco tempo. Tente novamente em um minuto.' }
   }
 
-  const db = banco()
+  const db = await bancoTenantPadrao()
   const registro = db.registros.find(
     (r) => r.cpfCnpj === documento && r.protocolCode?.toUpperCase() === parsed.data.protocolo.trim().toUpperCase(),
   )
@@ -77,7 +77,7 @@ export async function consultar(_e: ResultadoConsulta, form: FormData): Promise<
     return { erro: 'Não encontramos um processo com esse CPF/CNPJ e número de protocolo.' }
   }
 
-  const eventos = eventosDoRegistro(registro.id).map((e) => ({
+  const eventos = (await eventosDoRegistro(registro.id)).map((e) => ({
     de: e.deStatus,
     para: e.paraStatus,
     quando: e.ocorridoEm.toLocaleString('pt-BR'),

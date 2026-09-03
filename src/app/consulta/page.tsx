@@ -1,10 +1,16 @@
 import { formatarDocumento } from '@/lib/documento'
-import { banco } from '@/store/repo'
+import { bancoTenantPadrao } from '@/store/repo'
 import { FormConsulta } from './form'
 
-export default function ConsultaPublica() {
+// Consulta o banco a cada requisição: com Postgres real, gerar esta página
+// uma vez no build congelaria o exemplo para sempre (e exigiria DATABASE_URL
+// disponível no momento do build, não só em produção).
+export const dynamic = 'force-dynamic'
+
+export default async function ConsultaPublica() {
   // Exemplo pré-preenchido apenas para a demonstração da Fase 0.
-  const r = banco().registros.find((x) => x.protocolCode && x.processStatus === 'baixado')
+  const db = await bancoTenantPadrao()
+  const r = db.registros.find((x) => x.protocolCode && x.processStatus === 'baixado')
   const exemplo = r ? { documento: formatarDocumento(r.cpfCnpj), protocolo: r.protocolCode! } : null
 
   return (

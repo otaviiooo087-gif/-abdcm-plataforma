@@ -11,7 +11,7 @@ export default async function Registros({
 }: { searchParams: Promise<{ q?: string; status?: string; lote?: string }> }) {
   const sessao = await exigirSessao('registro.ver')
   const { q, status, lote } = await searchParams
-  const db = banco()
+  const db = await banco(sessao.tenantId)
 
   // Filtro por tenant sempre primeiro (I9); busca e filtros vêm depois.
   let registros = doTenant(db.registros, sessao.tenantId)

@@ -15,11 +15,10 @@ export type User = {
   id: string
   tenantId: string
   email: string
-  passwordHash: string
+  passwordHash: string | null
   role: Role
   nome: string
   isActive: boolean
-  parceiroId: string | null
 }
 
 export type Parceiro = {
@@ -138,14 +137,14 @@ export type Contestacao = {
 export type AuditLog = {
   id: string
   tenantId: string
-  atorUserId: string
+  atorUserId: string | null
   atorNome: string
   acao: string
   entidadeTipo: string
-  entidadeId: string
+  entidadeId: string | null
   antes: unknown
   depois: unknown
-  ip: string
+  ip: string | null
   ocorridoEm: Date
 }
 

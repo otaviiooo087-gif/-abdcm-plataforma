@@ -42,6 +42,7 @@ create table users (
   email             text not null,
   password_hash     text,                    -- nulo quando a identidade vem do Supabase Auth
   role              role_usuario not null,
+  nome              text not null,
   is_active         boolean not null default true,
   email_verified_at timestamptz,
   last_login_at     timestamptz,
@@ -90,7 +91,7 @@ create table associados (
   status_filiacao    status_filiacao not null default 'pre_cadastro',
   filiado_em         timestamptz,
   consentimento_em   timestamptz,
-  consentimento_ip   inet,
+  consentimento_ip   text,
   consentimento_hash text,
   ficha_documento_id uuid,
   created_at         timestamptz not null default now(),
@@ -135,6 +136,12 @@ create table submissoes (
   revisado_por_user_id uuid references users(id),
   reason_code          text,
   motivo_observacao    text,
+  -- Fila de conciliação: motivo pelo qual a submissão caiu em exceção
+  -- (valor_divergente, sem_webhook_48h, ...) e o que foi identificado no
+  -- comprovante ou no extrato do provedor. Nulo = caminho feliz automático.
+  motivo_excecao       text,
+  valor_identificado   bigint check (valor_identificado is null or valor_identificado >= 0),
+  comprovante_manual   boolean not null default false,
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now(),
   -- I11: reprovação exige código de motivo E observação, garantido no banco
@@ -222,6 +229,7 @@ create table process_events (
   para_status   process_status not null,
   ator_tipo     ator_tipo not null,
   ator_user_id  uuid references users(id),
+  transicao     text not null,
   motivo        text,
   reason_code   text,
   metadata      jsonb not null default '{}'::jsonb,
@@ -427,7 +435,7 @@ create table audit_log (
   entidade_id   uuid,
   antes         jsonb,
   depois        jsonb,
-  ip            inet,
+  ip            text,
   user_agent    text,
   ocorrido_em   timestamptz not null default now()
 );

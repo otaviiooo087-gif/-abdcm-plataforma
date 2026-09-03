@@ -9,7 +9,7 @@ import { TabelaEnvio, type LinhaEnvio } from './tabela-envio'
 
 export default async function EnvioDeLista() {
   const sessao = await exigirSessao('portal.parceiro')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
   const parceiroId = sessao.parceiroId!
 
   const parceiro = db.parceiros.find((p) => p.id === parceiroId)!

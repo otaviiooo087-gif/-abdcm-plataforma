@@ -7,7 +7,7 @@ import { TabelaAssociados, type LinhaAssociado } from './tabela'
 
 export default async function Associados() {
   const sessao = await exigirSessao('portal.parceiro')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
 
   const associados = doTenant(db.associados, sessao.tenantId).filter(
     (a) => a.parceiroId === sessao.parceiroId,

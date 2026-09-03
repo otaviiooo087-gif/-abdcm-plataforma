@@ -9,7 +9,7 @@ import { PainelConciliacao, type ItemFila } from './painel'
 export default async function Conciliacao() {
   // A permissão é verificada antes de qualquer leitura de dado.
   const sessao = await exigirSessao('conciliacao.ver')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
 
   const submissoes = doTenant(db.submissoes, sessao.tenantId).filter(
     (s) => s.paymentStatus === 'pendente' && s.motivoExcecao,

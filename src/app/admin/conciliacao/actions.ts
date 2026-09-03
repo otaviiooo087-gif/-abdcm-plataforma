@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { sessaoAtual } from '@/lib/auth'
 import { exigir } from '@/lib/authz'
-import { avancarAposPagamento, auditar, banco, doTenant, transicionarRegistro } from '@/store/repo'
+import { atualizarSubmissao, avancarAposPagamento, auditar, banco, doTenant, transicionarRegistro } from '@/store/repo'
 import {
   REASON_CODES_CONCILIACAO,
   type ReasonCodeConciliacao,
@@ -32,33 +32,33 @@ export async function aprovarSubmissao(
   const parsed = Aprovar.safeParse({ submissaoId: form.get('submissaoId') })
   if (!parsed.success) return { erro: 'Submissão inválida.' }
 
-  const db = banco()
+  const db = await banco(sessao.tenantId)
   const sub = doTenant(db.submissoes, sessao.tenantId).find((s) => s.id === parsed.data.submissaoId)
   if (!sub) return { erro: 'Submissão não encontrada neste tenant.' }
   if (sub.paymentStatus === 'pago') return { erro: 'Submissão já conciliada.' }
 
   const antes = { paymentStatus: sub.paymentStatus }
-  sub.paymentStatus = 'pago'
-  sub.confirmadoEm = new Date()
-  sub.motivoExcecao = null
+  await atualizarSubmissao(sessao.tenantId, sub.id, {
+    paymentStatus: 'pago', confirmadoEm: new Date(), motivoExcecao: null,
+  })
 
   // Cada registro transiciona pelo caminho único, gerando seu ProcessEvent (I2),
   // e em seguida avança sozinho para aguardando_protocolo.
   const registros = doTenant(db.registros, sessao.tenantId).filter((r) => r.submissaoId === sub.id)
   for (const r of registros) {
     if (r.processStatus === 'aguardando_pagamento') {
-      transicionarRegistro(r, { transicao: 'aprovado', atorTipo: 'admin', atorUserId: sessao.userId })
+      await transicionarRegistro(r, { transicao: 'aprovado', atorTipo: 'admin', atorUserId: sessao.userId })
     } else if (r.processStatus === 'enviado') {
-      transicionarRegistro(r, {
+      await transicionarRegistro(r, {
         transicao: 'webhook_pix_confirmado', atorTipo: 'admin', atorUserId: sessao.userId,
         metadata: { origem: 'conciliação manual' },
       })
     }
-    if (r.processStatus === 'pago') avancarAposPagamento(r)
+    if (r.processStatus === 'pago') await avancarAposPagamento(r)
   }
 
-  auditar({
-    tenantId: sessao.tenantId, atorUserId: sessao.userId, atorNome: sessao.nome,
+  await auditar({
+    tenantId: sessao.tenantId, atorUserId: sessao.userId,
     acao: 'conciliacao.aprovar', entidadeTipo: 'submissao', entidadeId: sub.id,
     antes, depois: { paymentStatus: 'pago', registrosAfetados: registros.length }, ip: '127.0.0.1',
   })
@@ -88,20 +88,20 @@ export async function reprovarSubmissao(
     return { erro: parsed.error.issues[0]?.message ?? 'Motivo obrigatório (código + observação).' }
   }
 
-  const db = banco()
+  const db = await banco(sessao.tenantId)
   const sub = doTenant(db.submissoes, sessao.tenantId).find((s) => s.id === parsed.data.submissaoId)
   if (!sub) return { erro: 'Submissão não encontrada neste tenant.' }
 
   const antes = { paymentStatus: sub.paymentStatus }
-  sub.paymentStatus = 'reprovado'
-  sub.reasonCode = parsed.data.reasonCode
-  sub.motivoObservacao = parsed.data.observacao
+  await atualizarSubmissao(sessao.tenantId, sub.id, {
+    paymentStatus: 'reprovado', reasonCode: parsed.data.reasonCode, motivoObservacao: parsed.data.observacao,
+  })
 
   const registros = doTenant(db.registros, sessao.tenantId).filter((r) => r.submissaoId === sub.id)
   let afetados = 0
   for (const r of registros) {
     if (r.processStatus === 'aguardando_pagamento') {
-      transicionarRegistro(r, {
+      await transicionarRegistro(r, {
         transicao: 'rejeitado', atorTipo: 'admin', atorUserId: sessao.userId,
         reasonCode: parsed.data.reasonCode, motivo: parsed.data.observacao,
       })
@@ -109,8 +109,8 @@ export async function reprovarSubmissao(
     }
   }
 
-  auditar({
-    tenantId: sessao.tenantId, atorUserId: sessao.userId, atorNome: sessao.nome,
+  await auditar({
+    tenantId: sessao.tenantId, atorUserId: sessao.userId,
     acao: 'conciliacao.reprovar', entidadeTipo: 'submissao', entidadeId: sub.id, antes,
     depois: { paymentStatus: 'reprovado', reasonCode: parsed.data.reasonCode, observacao: parsed.data.observacao },
     ip: '127.0.0.1',

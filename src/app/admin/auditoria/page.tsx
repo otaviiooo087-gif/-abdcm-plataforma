@@ -1,6 +1,7 @@
 import { Invariante } from '@/components/ui'
 import { exigirSessao } from '@/lib/sessao-guard'
-import { auditoria } from '@/store/repo'
+import { banco } from '@/store/repo'
+import type { AuditLog } from '@/store/schema'
 
 const ACOES: Record<string, string> = {
   'sessao.login': 'Login',
@@ -11,7 +12,8 @@ const ACOES: Record<string, string> = {
 
 export default async function Auditoria() {
   const sessao = await exigirSessao('auditoria.ver')
-  const linhas = auditoria(sessao.tenantId)
+  const db = await banco(sessao.tenantId)
+  const linhas: AuditLog[] = db.auditLog
 
   return (
     <div className="space-y-4">

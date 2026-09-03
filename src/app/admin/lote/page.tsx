@@ -9,7 +9,7 @@ const CICLO = ['rascunho', 'aberto', 'encerrado', 'em_protocolo', 'protocolado',
 
 export default async function ConsoleDoLote() {
   const sessao = await exigirSessao('lote.ver')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
   const t = sessao.tenantId
 
   const lote = doTenant(db.lotes, t).find((l) => l.status === 'aberto')!

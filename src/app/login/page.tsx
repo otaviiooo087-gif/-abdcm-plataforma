@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import { sessaoAtual } from '@/lib/auth'
 import { pode } from '@/lib/authz'
-import { SENHA_DEMO } from '@/store/seed'
+import { SENHA_DEMO } from '@/lib/demo'
 import { FormLogin } from './form'
 
 export default async function LoginPage() {

@@ -5,7 +5,7 @@ import { banco, doTenant } from '@/store/repo'
 
 export default async function Contestacoes() {
   const sessao = await exigirSessao('contestacao.ver')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
   const lista = doTenant(db.contestacoes, sessao.tenantId)
 
   return (

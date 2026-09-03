@@ -8,7 +8,7 @@ import { Contador } from './contador'
 
 export default async function DashboardParceiro() {
   const sessao = await exigirSessao('portal.parceiro')
-  const db = banco()
+  const db = await banco(sessao.tenantId)
   const parceiroId = sessao.parceiroId!
 
   // Isolamento por parceiro: a consulta filtra por tenant e por parceiro antes
