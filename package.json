@@ -1,0 +1,33 @@
+{
+  "name": "abdcm-plataforma",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "setup": "node scripts/preparar-ambiente.mjs",
+    "dev": "node scripts/preparar-ambiente.mjs && next dev",
+    "build": "next build",
+    "start": "node scripts/preparar-ambiente.mjs && next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "node e2e-check.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^15.5.25",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "server-only": "^0.0.1",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "playwright": "^1.62.1",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
