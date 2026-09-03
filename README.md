@@ -37,7 +37,8 @@ impersonação rastreada ("Ver como parceiro"), com banner permanente e registro
 npm test          # 133 testes de domínio (Vitest)
 npm run typecheck # TypeScript strict, sem erros
 npm run build     # build de produção
-npm run test:e2e  # 21 checks no navegador (exige o servidor rodando)
+npm run test:e2e  # 21 checks no navegador (exige o servidor rodando e, na primeira vez,
+                  # o navegador do Playwright: npx playwright install chromium)
 ```
 
 Os testes de domínio cobrem as 11 transições válidas da máquina de estados, a **matriz completa

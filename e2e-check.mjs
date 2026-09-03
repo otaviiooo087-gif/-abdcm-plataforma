@@ -1,6 +1,6 @@
 import { chromium } from 'playwright'
 
-const BASE = 'http://localhost:3100'
+const BASE = process.env.BASE_URL || 'http://localhost:3000'
 const SENHA = 'abdcm2026'
 const CONTAS = [
   ['parceiro@abdcm.org.br', '/app'],
@@ -11,7 +11,10 @@ const CONTAS = [
   ['admin@abdcm.org.br', '/admin'],
 ]
 
-const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' })
+// Usa o Chromium do Playwright por padrão. Em ambientes que já trazem o
+// navegador instalado, aponte o caminho em CHROMIUM_PATH.
+const executablePath = process.env.CHROMIUM_PATH || undefined
+const browser = await chromium.launch(executablePath ? { executablePath } : {})
 let falhas = 0
 const ok = (m) => console.log('  ok  ' + m)
 const falha = (m) => { falhas++; console.log('FALHA ' + m) }
