@@ -1,0 +1,35 @@
+name: ABDCM — popular banco de produção
+
+# Botão manual (Actions → este workflow → Run workflow). Não roda sozinho em
+# nenhum push — semear duas vezes duplica os dados fictícios, então é
+# deliberadamente só sob clique.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmar:
+        description: 'Digite SEMEAR para confirmar (roda contra o banco de produção)'
+        required: true
+
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confere a confirmação
+        if: ${{ github.event.inputs.confirmar != 'SEMEAR' }}
+        run: |
+          echo "Digite exatamente SEMEAR no campo de confirmação para rodar."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Popula o banco com os dados de demonstração
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run db:seed
