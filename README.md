@@ -60,6 +60,9 @@ npm run test:e2e  # 21 checks no navegador contra o Postgres de verdade (exige o
                   # npx playwright install chromium)
 ```
 
+Os checks escrevem no banco de verdade (aprovam uma submissão real). Para rodá-los de novo com
+dados previsíveis, esvazie e repovoe antes: `npm run db:reset && npm run db:seed`.
+
 Os testes de domínio cobrem as 11 transições válidas da máquina de estados, a **matriz completa
 das transições proibidas**, a exigência de `reason_code` + observação, a separação de funções
 entre os 6 papéis e o mascaramento de CPF/CNPJ.
@@ -70,13 +73,28 @@ documento na listagem, a revelação auditada, a aprovação na conciliação e 
 com escritas reais no banco: uma aprovação feita num boot do servidor continua lá depois de matar
 o processo e subir outro do zero (é exatamente o cenário de uma função serverless na Vercel).
 
-## Deploy (Vercel)
+## Deploy (Railway)
 
-Importe o repositório apontando **Root Directory** para `abdcm`, defina `SESSION_SECRET` e
-`DATABASE_URL` (Vercel Postgres resolve os dois com um clique em Storage → Create Database →
-Postgres, que já injeta `DATABASE_URL` no projeto) e rode `npm run db:migrate && npm run db:seed`
-uma vez, localmente, apontando para essa mesma `DATABASE_URL` de produção. Depois disso, todo
-`git push` na branch de produção publica sozinho.
+1. **railway.app** → **New Project → Deploy from GitHub repo** → escolha o repositório. Em
+   **Settings → Root Directory**, aponte para `abdcm` (o repositório tem outro projeto na raiz).
+2. No mesmo projeto Railway, **New → Database → PostgreSQL** — a Railway injeta `DATABASE_URL`
+   automaticamente no serviço da aplicação, sem copiar nada manualmente.
+3. Em **Variables** do serviço da aplicação (não do banco), adicione `SESSION_SECRET` com um
+   valor aleatório (gere com `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).
+4. Deploy. As migrations rodam **sozinhas a cada início do container** (é o próprio `npm run
+   start`, que chama `db:migrate` antes de subir o servidor — idempotente: já aplicada, ele pula).
+
+A partir daí, **todo `git push` atualiza o site sozinho** — é o comportamento "sempre atualizado"
+que motivou essa configuração.
+
+**Popular o banco de produção com os dados de demonstração** — sem terminal, direto do GitHub:
+adicione um secret `DATABASE_URL` (mesmo valor da Railway) em
+**Settings → Secrets and variables → Actions** do repositório, depois vá em
+**Actions → "ABDCM — popular banco de produção" → Run workflow**, digite `SEMEAR` no campo de
+confirmação e confirme. É deliberadamente manual — rodar duas vezes duplica os dados fictícios.
+
+*(Vercel também funciona, se preferir: mesmos passos, trocando "Root Directory" pela
+configuração equivalente e usando Vercel Postgres em vez do plugin da Railway.)*
 
 ## Roteiro sugerido de demonstração
 

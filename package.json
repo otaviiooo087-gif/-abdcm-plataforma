@@ -6,7 +6,7 @@
     "setup": "node scripts/preparar-ambiente.mjs",
     "dev": "node scripts/preparar-ambiente.mjs && next dev",
     "build": "next build",
-    "start": "node scripts/preparar-ambiente.mjs && next start",
+    "start": "node scripts/preparar-ambiente.mjs && npm run db:migrate && next start",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "node e2e-check.mjs",
@@ -22,18 +22,18 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "server-only": "^0.0.1",
-    "zod": "^4.5.4"
+    "zod": "^4.5.4",
+    "tsx": "^4.23.13",
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
-    "dotenv": "^17.4.2",
     "playwright": "^1.62.1",
     "postcss": "^8.5.26",
     "tailwindcss": "^4.3.3",
-    "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }
