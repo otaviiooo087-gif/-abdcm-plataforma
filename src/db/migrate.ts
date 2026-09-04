@@ -2,6 +2,7 @@ import { config } from 'dotenv'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import postgres from 'postgres'
+import { sslParaUrl } from './ssl'
 
 /**
  * Aplica as migrations de src/db/migrations, em ordem, uma por transação
@@ -17,7 +18,7 @@ async function main() {
   const dir = path.join(import.meta.dirname, 'migrations')
   const arquivos = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
 
-  const sql = postgres(url, { max: 1 })
+  const sql = postgres(url, { max: 1, ssl: sslParaUrl(url) })
   try {
     await sql`
       create table if not exists _migrations (
