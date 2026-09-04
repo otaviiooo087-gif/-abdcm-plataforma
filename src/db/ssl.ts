@@ -16,6 +16,51 @@
  * — por isso `rejectUnauthorized: false` em vez de `ssl: 'require'` puro.
  * Local (`localhost`/`127.0.0.1`) continua sem SSL, como já era.
  */
+/**
+ * Isola se a URL inválida quebra por causa das credenciais (usuário/senha —
+ * que não podemos imprimir, é segredo) ou do host/porta/banco (que não é
+ * segredo — nomes de host e banco já aparecem normalmente em qualquer
+ * console de provedor gerenciado). Reconstrói a URL trocando só a parte de
+ * credenciais por um valor neutro: se isso já resolve, o problema está na
+ * senha (típico: "@" ou "#" sem percent-encoding); se continua quebrando,
+ * o problema está depois do "@", que é seguro revelar.
+ */
+function diagnosticoUrlInvalida(bruta: string): string {
+  const semEsquema = bruta.slice(bruta.indexOf('://') + 3)
+  const antesDoPath = semEsquema.split(/[/?]/)[0]!
+  const arrobaIdx = antesDoPath.lastIndexOf('@')
+  if (arrobaIdx === -1) {
+    return 'DATABASE_URL não tem "@" separando credenciais do host — formato incompleto (esperado "postgresql://usuario:senha@host:porta/banco").'
+  }
+
+  const credenciais = antesDoPath.slice(0, arrobaIdx)
+  const depoisDoArroba = semEsquema.slice(arrobaIdx + 1)
+  const [usuario = '', ...resto] = credenciais.split(':')
+  const senha = resto.join(':')
+
+  let hostSozinhoOk = true
+  try {
+    new URL(`postgresql://x:y@${depoisDoArroba}`)
+  } catch {
+    hostSozinhoOk = false
+  }
+
+  if (hostSozinhoOk) {
+    return (
+      `DATABASE_URL não é uma URL válida, mas host/porta/banco sozinhos parseiam bem — o ` +
+      `problema está nas credenciais (usuário: ${usuario.length} caractere(s), senha: ` +
+      `${senha.length} caractere(s)). Causa mais provável: a senha tem "@", "#", espaço ou "/" ` +
+      `sem percent-encoding. Troque na origem: "@"→"%40", "#"→"%23", "/"→"%2F", espaço→"%20".`
+    )
+  }
+
+  return (
+    `DATABASE_URL não é uma URL válida, e o problema está depois do "@" — não é credencial, ` +
+    `então dá pra mostrar: "${depoisDoArroba}". Confira porta numérica válida e host sem ` +
+    `espaço/caractere especial.`
+  )
+}
+
 export function opcoesDeConexao(databaseUrl: string) {
   const bruta = databaseUrl.trim()
   if (!/^postgres(ql)?:\/\//.test(bruta)) {
@@ -29,21 +74,7 @@ export function opcoesDeConexao(databaseUrl: string) {
   try {
     u = new URL(bruta)
   } catch {
-    // GitHub Actions mascara o valor do secret em qualquer log — nunca dá
-    // pra ver a string real aqui. Em vez de deixar o "Invalid URL" genérico
-    // (sem pista nenhuma), relata só características estruturais seguras:
-    // nada disso permite reconstruir a senha, mas já aponta o caractere
-    // problemático (típico: espaço, quebra de linha ou "@"/"#" sobrando).
-    const linhas = bruta.split('\n').length
-    throw new Error(
-      `DATABASE_URL começa certo ("postgres(ql)://") mas não é uma URL válida. Pistas sem ` +
-        `expor o valor: comprimento=${bruta.length}, linhas=${linhas}, ` +
-        `contém-espaço=${/\s/.test(bruta)}, contém-arroba='@'×${(bruta.match(/@/g) ?? []).length}, ` +
-        `contém-cerquilha='#'×${(bruta.match(/#/g) ?? []).length}, ` +
-        `termina-com-barra=${bruta.endsWith('/')}. Prováveis causas: colou algo além da URL ` +
-        `(aspas, o nome da variável), sobrou uma quebra de linha, ou a senha tem "@"/"#" sem ` +
-        `percent-encoding (troque "@" por "%40" e "#" por "%23" na senha).`,
-    )
+    throw new Error(diagnosticoUrlInvalida(bruta))
   }
   const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1'
   return {
