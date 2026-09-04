@@ -2,7 +2,7 @@ import 'server-only'
 import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import * as schema from './schema'
-import { sslParaUrl } from './ssl'
+import { opcoesDeConexao } from './ssl'
 
 function url(): string {
   const u = process.env.DATABASE_URL
@@ -24,7 +24,7 @@ function url(): string {
  */
 const g = globalThis as { __abdcmSql?: postgres.Sql }
 function conexao(): postgres.Sql {
-  g.__abdcmSql ??= postgres(url(), { prepare: false, max: 5, idle_timeout: 20, ssl: sslParaUrl(url()) })
+  g.__abdcmSql ??= postgres({ ...opcoesDeConexao(url()), prepare: false, max: 5, idle_timeout: 20 })
   return g.__abdcmSql
 }
 

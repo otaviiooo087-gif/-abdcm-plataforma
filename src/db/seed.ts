@@ -4,7 +4,7 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { SENHA_DEMO } from '../lib/demo'
 import * as s from './schema'
-import { sslParaUrl } from './ssl'
+import { opcoesDeConexao } from './ssl'
 
 /**
  * Semeia o banco com os mesmos dados fictícios de demonstração que a Fase 0
@@ -47,7 +47,7 @@ async function main() {
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL ausente. Copie .env.example para .env.local e preencha.')
 
-  const sql = postgres(url, { max: 1, ssl: sslParaUrl(url) })
+  const sql = postgres({ ...opcoesDeConexao(url), max: 1 })
   const db = drizzle(sql, { schema: s })
   const agora = Date.now()
 

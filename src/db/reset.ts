@@ -1,6 +1,6 @@
 import { config } from 'dotenv'
 import postgres from 'postgres'
-import { sslParaUrl } from './ssl'
+import { opcoesDeConexao } from './ssl'
 
 /**
  * Esvazia as tabelas de domínio (TRUNCATE ... CASCADE, que resolve a ordem
@@ -13,7 +13,7 @@ async function main() {
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL ausente. Copie .env.example para .env.local e preencha.')
 
-  const sql = postgres(url, { max: 1, ssl: sslParaUrl(url) })
+  const sql = postgres({ ...opcoesDeConexao(url), max: 1 })
   try {
     console.log('esvaziando tabelas...')
     await sql`
