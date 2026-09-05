@@ -12,7 +12,7 @@ import { ConsultaPublica } from './components/ConsultaPublica.js';
 import { TimelineModal } from './components/TimelineModal.js';
 import { TransitionModal } from './components/TransitionModal.js';
 import { Lote, Registro, Associado, Submissao, AuditLog, UserRole } from './domain/types.js';
-import { UserSession } from './server/mockDb.js';
+import { UserSession } from './server/mockData.js';
 
 export default function App() {
   const [currentSurface, setCurrentSurface] = useState<'parceiro' | 'admin' | 'publico'>('parceiro');

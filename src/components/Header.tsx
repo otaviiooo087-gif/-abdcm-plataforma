@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserRole } from '../domain/types.js';
-import { UserSession } from '../server/mockDb.js';
+import { UserSession } from '../server/mockData.js';
 import { Shield, Bell, HelpCircle, Users, Menu, User, Layers, ArrowLeftRight } from 'lucide-react';
 
 interface HeaderProps {

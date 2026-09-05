@@ -1,5 +1,5 @@
 import React from 'react';
-import { UserSession } from '../server/mockDb.js';
+import { UserSession } from '../server/mockData.js';
 import {
   LayoutDashboard,
   ShieldCheck,
