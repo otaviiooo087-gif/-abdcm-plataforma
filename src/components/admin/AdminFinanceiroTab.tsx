@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Submissao, Registro, Lote } from '../../domain/types.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
-import { UserSession } from '../../server/mockDb.js';
+import { UserSession } from '../../server/mockData.js';
 import {
   DollarSign,
   Search,

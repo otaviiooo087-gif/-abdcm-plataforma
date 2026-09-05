@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Lote, Registro } from '../../domain/types.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
-import { UserSession } from '../../server/mockDb.js';
+import { UserSession } from '../../server/mockData.js';
 import {
   Layers,
   Search,

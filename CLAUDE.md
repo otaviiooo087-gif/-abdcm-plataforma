@@ -178,13 +178,15 @@ transição válida **e** para cada proibida.
 > **Nota de estado (setembro/2026):** a Fase 0 já tinha chegado a rodar em Next.js + Drizzle +
 > Postgres real, em produção. A pedido explícito do usuário — que preferiu o visual do protótipo
 > gerado no Google AI Studio ao que estava em produção — esse código foi **substituído** pelo
-> protótipo: **Vite + Express + `mockDb` em memória**, sem persistência real, sem os 6 papéis
-> autenticados, sem migrations. Ou seja: **o que está implementado agora diverge da stack
-> decidida abaixo.** Isso foi uma escolha consciente e registrada, não um desvio silencioso — mas
-> significa que grande parte dos 11 invariantes (I2, I4, I5, I6, I9 principalmente) **não estão
-> garantidos pelo código atual**. Uma sessão futura que for evoluir isto precisa: (a) saber que
-> os dados somem a cada restart do processo, e (b) tratar a reconstrução da persistência real
-> como prioridade antes de qualquer uso com dados reais de associados.
+> protótipo: **Vite + Express**. Na troca, a persistência ficou em memória por um tempo (dados
+> somem a cada restart) — isso foi **corrigido em seguida**: o protótipo agora fala com Postgres
+> de verdade via Drizzle (`src/server/db/`, `src/server/store.ts`), com as mesmas migrations e
+> seed do padrão anterior. Ou seja: **a stack ainda diverge da decidida abaixo** (é Vite+Express,
+> não Next.js; não tem os 6 papéis autenticados — a troca de papel continua sem login real; não
+> usa Zod nem pg-boss ainda), mas a persistência (I2 ProcessEvent, I9 tenant_id) já está
+> garantida de novo. Uma sessão futura que for evoluir isto: o schema vive em
+> `src/server/db/schema.ts` + `src/server/db/migrations/`, espelhando 1:1 os tipos de
+> `src/domain/types.ts`.
 
 **Decidida para a versão real (ainda não implementada neste snapshot):**
 
@@ -196,11 +198,13 @@ transição válida **e** para cada proibida.
 - **pg-boss** para filas e agendamento (importação, notificação, reconciliação ativa, SLA)
 - **Vitest** para testes de domínio
 
-**Implementada agora (protótipo do AI Studio):**
+**Implementada agora (protótipo do AI Studio + persistência real):**
 
 - **Vite + React 19** + **Express** (servidor único, `server.ts`, com Vite como middleware)
-- **`mockDb`** em memória (`src/server/mockDb.ts`) — reinicia zerado a cada boot do processo
-- **Troca de papel sem login real** (`/api/auth/switch-role`) — não é autenticação
+- **Postgres via Drizzle** (`src/server/db/`) — schema, migrations e seed reais; `src/server/store.ts`
+  é a camada de acesso a dados (substituiu o antigo `mockDb.ts` em memória)
+- **Troca de papel sem login real** (`/api/auth/switch-role`) — não é autenticação, e não precisa
+  persistir (não é dado que o usuário perderia)
 - **Vitest** para os poucos testes de domínio existentes (`state-machine.test.ts`)
 
 **Três frontends, um projeto (visão da versão real — o protótipo ainda não separa isso):**

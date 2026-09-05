@@ -6,7 +6,7 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { serverStore } from './src/server/mockDb';
+import { serverStore } from './src/server/store';
 import { cleanDocument } from './src/lib/masking/documentMasker';
 
 async function startServer() {
@@ -36,37 +36,37 @@ async function startServer() {
   });
 
   // 2. Lotes
-  app.get('/api/lotes', (_req: Request, res: Response) => {
-    res.json(serverStore.lotes);
+  app.get('/api/lotes', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getLotes());
   });
 
   // 3. Associados
-  app.get('/api/associados', (_req: Request, res: Response) => {
+  app.get('/api/associados', async (_req: Request, res: Response) => {
     const session = serverStore.getSession();
+    const todos = await serverStore.getAssociados();
     if (session.role === 'parceiro') {
-      const own = serverStore.associados.filter((a) => a.parceiro_id === session.parceiro_id);
-      res.json(own);
+      res.json(todos.filter((a) => a.parceiro_id === session.parceiro_id));
       return;
     }
-    res.json(serverStore.associados);
+    res.json(todos);
   });
 
   // 4. Registros
-  app.get('/api/registros', (_req: Request, res: Response) => {
+  app.get('/api/registros', async (_req: Request, res: Response) => {
     const session = serverStore.getSession();
+    const todos = await serverStore.getRegistros();
     if (session.role === 'parceiro') {
-      const own = serverStore.registros.filter((r) => r.parceiro_id === session.parceiro_id);
-      res.json(own);
+      res.json(todos.filter((r) => r.parceiro_id === session.parceiro_id));
       return;
     }
-    res.json(serverStore.registros);
+    res.json(todos);
   });
 
   // 4.1 Cadastrar Novo Registro (Avulso)
-  app.post('/api/registros', (req: Request, res: Response) => {
+  app.post('/api/registros', async (req: Request, res: Response) => {
     try {
       const { nome, cpf_cnpj, tipo_documento, telefone_whatsapp } = req.body;
-      const novo = serverStore.addRegistro({
+      const novo = await serverStore.addRegistro({
         nome,
         cpf_cnpj,
         tipo_documento,
@@ -81,20 +81,17 @@ async function startServer() {
   });
 
   // 4.2 Importação em Massa de Registros (Planilha Excel/CSV)
-  app.post('/api/registros/import', (req: Request, res: Response) => {
+  app.post('/api/registros/import', async (req: Request, res: Response) => {
     try {
       const { itens } = req.body;
       if (!Array.isArray(itens) || itens.length === 0) {
         res.status(400).json({ error: 'Nenhum item válido para importação.' });
         return;
       }
-      const importados = itens.map((item: { nome: string; cpf_cnpj: string }) =>
-        serverStore.addRegistro({
-          nome: item.nome,
-          cpf_cnpj: item.cpf_cnpj,
-          origem: 'planilha',
-        })
-      );
+      const importados = [];
+      for (const item of itens as Array<{ nome: string; cpf_cnpj: string }>) {
+        importados.push(await serverStore.addRegistro({ nome: item.nome, cpf_cnpj: item.cpf_cnpj, origem: 'planilha' }));
+      }
       res.status(201).json({ success: true, count: importados.length, importados });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro na importação';
@@ -103,10 +100,10 @@ async function startServer() {
   });
 
   // 4.3 Excluir Registro Pendente
-  app.delete('/api/registros/:id', (req: Request, res: Response) => {
+  app.delete('/api/registros/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      serverStore.deleteRegistro(id);
+      await serverStore.deleteRegistro(id);
       res.json({ success: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao excluir registro';
@@ -115,11 +112,11 @@ async function startServer() {
   });
 
   // 4.4 Submissão de Lote para Pagamento PIX
-  app.post('/api/submissoes', (req: Request, res: Response) => {
+  app.post('/api/submissoes', async (req: Request, res: Response) => {
     try {
       const { registroIds } = req.body;
       const session = serverStore.getSession();
-      const result = serverStore.submitBatch(registroIds, session.id);
+      const result = await serverStore.submitBatch(registroIds, session.id);
       res.status(201).json(result);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao submeter lote';
@@ -128,16 +125,16 @@ async function startServer() {
   });
 
   // 4.5 Listar Submissões
-  app.get('/api/submissoes', (_req: Request, res: Response) => {
-    res.json(serverStore.submissoes);
+  app.get('/api/submissoes', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getSubmissoes());
   });
 
   // 4.6 Pagar / Simular Confirmação PIX da Submissão
-  app.post('/api/submissoes/:id/pagar', (req: Request, res: Response) => {
+  app.post('/api/submissoes/:id/pagar', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const session = serverStore.getSession();
-      const result = serverStore.paySubmissao(id, session.id);
+      const result = await serverStore.paySubmissao(id, session.id);
       res.json({ success: true, ...result });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao processar pagamento';
@@ -146,12 +143,12 @@ async function startServer() {
   });
 
   // 4.6.1 Aprovar Submissão Financeira
-  app.post('/api/submissoes/:id/aprovar', (req: Request, res: Response) => {
+  app.post('/api/submissoes/:id/aprovar', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { motivo } = req.body;
       const session = serverStore.getSession();
-      const result = serverStore.approveSubmissao(id, session.id, motivo);
+      const result = await serverStore.approveSubmissao(id, session.id, motivo);
       res.json({ success: true, ...result });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao aprovar submissão';
@@ -160,12 +157,12 @@ async function startServer() {
   });
 
   // 4.6.2 Reprovar Submissão Financeira
-  app.post('/api/submissoes/:id/reprovar', (req: Request, res: Response) => {
+  app.post('/api/submissoes/:id/reprovar', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const { motivo } = req.body;
       const session = serverStore.getSession();
-      const result = serverStore.reproveSubmissao(id, session.id, motivo || 'Comprovante reprovado na conciliação');
+      const result = await serverStore.reproveSubmissao(id, session.id, motivo || 'Comprovante reprovado na conciliação');
       res.json({ success: true, ...result });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao reprovar submissão';
@@ -174,10 +171,11 @@ async function startServer() {
   });
 
   // 4.7 Cancelar Submissão Pendente
-  app.delete('/api/submissoes/:id', (req: Request, res: Response) => {
+  app.delete('/api/submissoes/:id', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      serverStore.cancelSubmissao(id);
+      const session = serverStore.getSession();
+      await serverStore.cancelSubmissao(id, session.id);
       res.json({ success: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao cancelar submissão';
@@ -186,7 +184,7 @@ async function startServer() {
   });
 
   // 5. Transição de Status (I1 & I2: Validação no servidor + ProcessEvent obrigatório)
-  app.post('/api/registros/:id/transition', (req: Request, res: Response) => {
+  app.post('/api/registros/:id/transition', async (req: Request, res: Response) => {
     const { id } = req.params;
     const { paraStatus, motivo } = req.body;
     const session = serverStore.getSession();
@@ -202,7 +200,7 @@ async function startServer() {
       }
 
       const atorTipo = session.role === 'parceiro' ? 'parceiro' : 'admin';
-      const result = serverStore.transitionStatus(
+      const result = await serverStore.transitionStatus(
         id,
         paraStatus,
         motivo || 'Transição administrativa solicitada',
@@ -222,12 +220,12 @@ async function startServer() {
   });
 
   // 6. Revelação de Documento LGPD (I6: com auditoria obrigatória)
-  app.post('/api/registros/:id/reveal-doc', (req: Request, res: Response) => {
+  app.post('/api/registros/:id/reveal-doc', async (req: Request, res: Response) => {
     const { id } = req.params;
     const session = serverStore.getSession();
 
     try {
-      const raw = serverStore.revealDocument(id, session.id);
+      const raw = await serverStore.revealDocument(id, session.id);
       res.json({ cpf_cnpj_raw: raw });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao revelar documento';
@@ -236,24 +234,24 @@ async function startServer() {
   });
 
   // 7. Timeline / ProcessEvents do Registro (I2)
-  app.get('/api/registros/:id/timeline', (req: Request, res: Response) => {
+  app.get('/api/registros/:id/timeline', async (req: Request, res: Response) => {
     const { id } = req.params;
-    const events = serverStore.processEvents.filter((pe) => pe.registro_id === id);
-    res.json(events);
+    const eventos = await serverStore.getProcessEvents();
+    res.json(eventos.filter((pe) => pe.registro_id === id));
   });
 
   // 8. Trilha de Auditoria (Imutável)
-  app.get('/api/audit', (_req: Request, res: Response) => {
+  app.get('/api/audit', async (_req: Request, res: Response) => {
     const session = serverStore.getSession();
     if (session.role !== 'administrador') {
       res.status(403).json({ error: 'Apenas administradores podem visualizar o log de auditoria completo.' });
       return;
     }
-    res.json(serverStore.auditLogs);
+    res.json(await serverStore.getAuditLogs());
   });
 
   // 9. Consulta Pública (sem login, CPF + Protocolo)
-  app.post('/api/consulta', (req: Request, res: Response) => {
+  app.post('/api/consulta', async (req: Request, res: Response) => {
     const { cpf_cnpj, protocol_code } = req.body;
     if (!cpf_cnpj && !protocol_code) {
       res.status(400).json({ error: 'Informe o CPF/CNPJ ou o Número do Protocolo.' });
@@ -263,7 +261,13 @@ async function startServer() {
     const cleanInputDoc = cleanDocument(cpf_cnpj || '');
     const cleanInputProt = (protocol_code || '').trim().toUpperCase();
 
-    const matched = serverStore.registros.filter((reg) => {
+    const [registros, lotes, processEvents] = await Promise.all([
+      serverStore.getRegistros(),
+      serverStore.getLotes(),
+      serverStore.getProcessEvents(),
+    ]);
+
+    const matched = registros.filter((reg) => {
       const matchDoc = cleanInputDoc && cleanDocument(reg.cpf_cnpj_raw) === cleanInputDoc;
       const matchProt = cleanInputProt && reg.protocol_code && reg.protocol_code.toUpperCase() === cleanInputProt;
       return matchDoc || matchProt;
@@ -275,8 +279,8 @@ async function startServer() {
     }
 
     const results = matched.map((reg) => {
-      const lote = serverStore.lotes.find((l) => l.id === reg.lote_id);
-      const timeline = serverStore.processEvents
+      const lote = lotes.find((l) => l.id === reg.lote_id);
+      const timeline = processEvents
         .filter((pe) => pe.registro_id === reg.id)
         .map((pe) => ({
           de_status: pe.de_status,
