@@ -1,0 +1,6 @@
+{
+  "name": "ABDCM — Gestão de Ação Coletiva",
+  "description": "Plataforma de gestão de ação coletiva e filiação da ABDCM (Associação Brasileira de Defesa do Consumidor e do Trabalhador).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
