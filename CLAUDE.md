@@ -173,7 +173,20 @@ transição válida **e** para cada proibida.
 
 ---
 
-## 5. Stack (decidida — não propor alternativas)
+## 5. Stack
+
+> **Nota de estado (setembro/2026):** a Fase 0 já tinha chegado a rodar em Next.js + Drizzle +
+> Postgres real, em produção. A pedido explícito do usuário — que preferiu o visual do protótipo
+> gerado no Google AI Studio ao que estava em produção — esse código foi **substituído** pelo
+> protótipo: **Vite + Express + `mockDb` em memória**, sem persistência real, sem os 6 papéis
+> autenticados, sem migrations. Ou seja: **o que está implementado agora diverge da stack
+> decidida abaixo.** Isso foi uma escolha consciente e registrada, não um desvio silencioso — mas
+> significa que grande parte dos 11 invariantes (I2, I4, I5, I6, I9 principalmente) **não estão
+> garantidos pelo código atual**. Uma sessão futura que for evoluir isto precisa: (a) saber que
+> os dados somem a cada restart do processo, e (b) tratar a reconstrução da persistência real
+> como prioridade antes de qualquer uso com dados reais de associados.
+
+**Decidida para a versão real (ainda não implementada neste snapshot):**
 
 - **Next.js (App Router)** + **TypeScript strict** + **Tailwind**
 - **Postgres** via **Supabase** (banco, Auth, Storage). RLS como **segunda** camada de defesa,
@@ -183,7 +196,14 @@ transição válida **e** para cada proibida.
 - **pg-boss** para filas e agendamento (importação, notificação, reconciliação ativa, SLA)
 - **Vitest** para testes de domínio
 
-**Três frontends, um projeto:**
+**Implementada agora (protótipo do AI Studio):**
+
+- **Vite + React 19** + **Express** (servidor único, `server.ts`, com Vite como middleware)
+- **`mockDb`** em memória (`src/server/mockDb.ts`) — reinicia zerado a cada boot do processo
+- **Troca de papel sem login real** (`/api/auth/switch-role`) — não é autenticação
+- **Vitest** para os poucos testes de domínio existentes (`state-machine.test.ts`)
+
+**Três frontends, um projeto (visão da versão real — o protótipo ainda não separa isso):**
 
 | Superfície | Domínio | Quem acessa |
 |---|---|---|
