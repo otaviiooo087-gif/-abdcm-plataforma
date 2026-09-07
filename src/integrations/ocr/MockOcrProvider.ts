@@ -7,6 +7,6 @@ import type { OcrProvider, DocumentoLido, DocumentoLidoInput } from './OcrProvid
 export class MockOcrProvider implements OcrProvider {
   async lerDocumento(_input: DocumentoLidoInput): Promise<DocumentoLido> {
     void _input;
-    return { nome: null, cpf: null, confianca: 'baixa' };
+    return { nome: null, cpf: null, tipoDocumento: null, confianca: 'baixa' };
   }
 }

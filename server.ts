@@ -643,13 +643,13 @@ async function startServer() {
     }
   });
 
-  // 6.8.1 Anexo com leitura automática (OCR): presign sem associado ainda
-  // conhecido, e leitura+casamento por CPF depois que o navegador já mandou
-  // os arquivos pro storage.
+  // 6.8.1 Anexo com leitura automática (OCR): presign sem associado nem tipo
+  // ainda conhecidos, e leitura+casamento por CPF depois que o navegador já
+  // mandou os arquivos pro storage.
   app.post('/api/documentos/staging/presign', async (req: Request, res: Response) => {
     try {
-      const { tipo, mimeType } = req.body;
-      const resultado = await serverStore.presignStagingUpload(tipo, mimeType);
+      const { mimeType } = req.body;
+      const resultado = await serverStore.presignStagingUpload(mimeType);
       res.json(resultado);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao autorizar upload';
