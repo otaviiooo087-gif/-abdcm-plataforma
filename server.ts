@@ -13,6 +13,7 @@ import { avisarStatusProcesso, rodarAutomacoes } from './src/server/notificacoes
 import { pixProviderConfigurado } from './src/integrations/pix/index';
 import { whatsAppProviderConfigurado } from './src/integrations/whatsapp/index';
 import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integrations/storage/index';
+import { ocrProviderConfigurado } from './src/integrations/ocr/index';
 import type { Registro } from './src/domain/types';
 import { promises as fs } from 'node:fs';
 
@@ -564,6 +565,7 @@ async function startServer() {
       pix: { provider: 'asaas', configurado: pixProviderConfigurado() },
       whatsapp: { provider: 'z-api', configurado: whatsAppProviderConfigurado() },
       storage: { provider: 'r2', configurado: storageProviderConfigurado() },
+      ocr: { provider: 'claude', configurado: ocrProviderConfigurado() },
     });
   });
 
@@ -637,6 +639,37 @@ async function startServer() {
       res.json(resultado);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao autorizar upload';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.8.1 Anexo com leitura automática (OCR): presign sem associado ainda
+  // conhecido, e leitura+casamento por CPF depois que o navegador já mandou
+  // os arquivos pro storage.
+  app.post('/api/documentos/staging/presign', async (req: Request, res: Response) => {
+    try {
+      const { tipo, mimeType } = req.body;
+      const resultado = await serverStore.presignStagingUpload(tipo, mimeType);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao autorizar upload';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/documentos/ocr/preview', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      const { itens } = req.body;
+      if (!Array.isArray(itens)) {
+        res.status(400).json({ error: 'itens deve ser uma lista.' });
+        return;
+      }
+      const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+      const resultado = await serverStore.lerDocumentosOcr(itens, parceiroId);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao ler documentos';
       res.status(400).json({ error: msg });
     }
   });

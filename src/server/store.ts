@@ -37,6 +37,7 @@ import { maskDocument } from '../lib/masking/documentMasker.js';
 import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
 import { getStorageProvider, storageProviderConfigurado } from '../integrations/storage/index.js';
 import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integrations/whatsapp/index.js';
+import { getOcrProvider } from '../integrations/ocr/index.js';
 
 export { ABDCM_TENANT_ID } from './mockData.js';
 export type { UserSession } from './mockData.js';
@@ -1462,6 +1463,88 @@ async function presignDocumentoUpload(
   return { uploadUrl, key, headers };
 }
 
+/** Igual a presignDocumentoUpload, mas sem associado ainda — usado no anexo
+ * com leitura automática (OCR), onde o arquivo é enviado antes de sabermos
+ * de quem é. A key vira permanente se o documento for confirmado depois
+ * (confirmarDocumentoUpload aceita qualquer key, não só a convenção
+ * documentos/{tenant}/{associadoId}/{tipo}) — não precisa mover o arquivo. */
+async function presignStagingUpload(
+  tipo: TipoDocumento,
+  mimeType: string,
+): Promise<{ uploadUrl: string; key: string; headers?: Record<string, string> }> {
+  if (!TIPOS_DOCUMENTO.includes(tipo)) throw new Error(`Tipo de documento inválido: ${tipo}.`);
+
+  const key = `documentos/staging/${ABDCM_TENANT_ID}/${novoId('stg')}-${tipo}.${extensaoPorMime(mimeType)}`;
+  const { uploadUrl, headers } = await getStorageProvider().criarUrlUpload({
+    key,
+    contentType: mimeType,
+    expiraEmSegundos: URL_STORAGE_EXPIRA_SEGUNDOS,
+  });
+  return { uploadUrl, key, headers };
+}
+
+export interface OcrPreviewItem {
+  key: string;
+  tipo: TipoDocumento;
+  nomeArquivo: string;
+  ocrNome: string | null;
+  ocrCpf: string | null;
+  confianca: 'alta' | 'baixa';
+  /** Associado encontrado pelo CPF lido — mostrado como sugestão mesmo com
+   * confiança baixa, pra conferência ficar rápida, mas só é usado direto
+   * (sem toque humano) quando autoConfirmavel também for true. */
+  associadoIdSugerido: string | null;
+  associadoNomeSugerido: string | null;
+  autoConfirmavel: boolean;
+  jaTemEsseTipo: boolean;
+}
+
+/** Lê cada arquivo já enviado pra um key de staging (presignStagingUpload),
+ * tenta casar com um associado existente pelo CPF lido e devolve tudo pra
+ * conferência humana (I3) — nada é gravado em documentos_associado aqui.
+ * Confiança baixa ou CPF não encontrado na base voltam com associadoId nulo,
+ * pra fila de conferência manual (nunca descarta silenciosamente). */
+async function lerDocumentosOcr(
+  itens: { key: string; tipo: TipoDocumento; mimeType: string; nomeArquivo: string }[],
+  parceiroId?: string,
+): Promise<OcrPreviewItem[]> {
+  const todosAssociados = await db().select().from(schema.associados).where(eq(schema.associados.tenantId, ABDCM_TENANT_ID));
+  const porCpf = new Map(todosAssociados.map((a) => [a.cpfCnpjRaw, a]));
+
+  const todosDocs = await db().select().from(schema.documentosAssociado).where(eq(schema.documentosAssociado.tenantId, ABDCM_TENANT_ID));
+  const docsPorAssociado = new Map<string, Set<string>>();
+  for (const d of todosDocs) {
+    if (!docsPorAssociado.has(d.associadoId)) docsPorAssociado.set(d.associadoId, new Set());
+    docsPorAssociado.get(d.associadoId)!.add(d.tipo);
+  }
+
+  const ocr = getOcrProvider();
+
+  return Promise.all(
+    itens.map(async (item) => {
+      const imagemUrl = resolverUrlAbsoluta(await getStorageProvider().criarUrlDownload(item.key, URL_STORAGE_EXPIRA_SEGUNDOS));
+      const lido = await ocr.lerDocumento({ imagemUrl, mimeType: item.mimeType });
+
+      const associado = lido.cpf ? porCpf.get(lido.cpf) : undefined;
+      const associadoValido = associado && (!parceiroId || associado.parceiroId === parceiroId) ? associado : null;
+      const docs = associadoValido ? docsPorAssociado.get(associadoValido.id) ?? new Set<string>() : new Set<string>();
+
+      return {
+        key: item.key,
+        tipo: item.tipo,
+        nomeArquivo: item.nomeArquivo,
+        ocrNome: lido.nome,
+        ocrCpf: lido.cpf,
+        confianca: lido.confianca,
+        associadoIdSugerido: associadoValido?.id ?? null,
+        associadoNomeSugerido: associadoValido?.nome ?? null,
+        autoConfirmavel: lido.confianca === 'alta' && Boolean(associadoValido),
+        jaTemEsseTipo: docs.has(item.tipo),
+      };
+    }),
+  );
+}
+
 async function confirmarDocumentoUpload(data: {
   associadoId: string;
   tipo: TipoDocumento;
@@ -1779,6 +1862,8 @@ export const serverStore = {
   getNotificacoesLog,
   previewDocumentos,
   presignDocumentoUpload,
+  presignStagingUpload,
+  lerDocumentosOcr,
   confirmarDocumentoUpload,
   getDocumentosStatus,
   getDocumentoDownloadUrl,
