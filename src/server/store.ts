@@ -911,6 +911,28 @@ async function revealDocument(registroId: string, userId: string): Promise<strin
   return reg.cpfCnpjRaw;
 }
 
+/** Revelação do CPF/CNPJ do associado sob clique, com auditoria (I6) — usada
+ * na aba Associados do admin, onde a busca é pelo associado diretamente
+ * (ele existe independente de estar em algum lote/registro). */
+async function revealAssociadoCpf(associadoId: string, userId: string): Promise<string> {
+  const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
+  if (!associado) throw new Error('Associado não localizado.');
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: associado.tenantId,
+    atorUserId: userId,
+    acao: 'REVELACAO_DOCUMENTO_LGPD',
+    entidadeTipo: 'associados',
+    entidadeId: associado.id,
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: new Date().toISOString(),
+  });
+
+  return associado.cpfCnpjRaw;
+}
+
 /** Atualiza dados de configuração do lote (ex.: prazo de encerramento) — só admin usa. */
 async function updateLote(
   id: string,
@@ -1693,6 +1715,7 @@ export const serverStore = {
   deleteRegistro,
   transitionStatus,
   revealDocument,
+  revealAssociadoCpf,
   updateLote,
   createLote,
   encerrarLote,

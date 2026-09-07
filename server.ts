@@ -396,6 +396,23 @@ async function startServer() {
     }
   });
 
+  // 6.0.1 Revelação de CPF/CNPJ do associado (aba Associados do admin) — I6
+  app.post('/api/associados/:id/reveal-cpf', async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM revela CPF/CNPJ de associados.' });
+      return;
+    }
+    try {
+      const raw = await serverStore.revealAssociadoCpf(id, session.id);
+      res.json({ cpf_cnpj_raw: raw });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao revelar documento';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 6.1 Contestações ("Reclame Aqui")
   app.get('/api/contestacoes', async (_req: Request, res: Response) => {
     const session = serverStore.getSession();
