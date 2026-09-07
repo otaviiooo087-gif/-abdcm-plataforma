@@ -6,34 +6,16 @@ import { UserSession } from '../server/mockData.js';
 import { AdminProcessosTab } from './admin/AdminProcessosTab.js';
 import { AdminFinanceiroTab } from './admin/AdminFinanceiroTab.js';
 import { AdminConfiguracoesTab } from './admin/AdminConfiguracoesTab.js';
-import {
-  ShieldAlert,
-  Eye,
-  ArrowRightLeft,
-  CheckCircle,
-  XCircle,
-  FileText,
-  AlertTriangle,
-  Lock,
-  Search,
-  Building2,
-  Clock,
-  Sparkles,
-  RefreshCw,
-  Download,
-  Plus,
-  X,
-  Layers,
-  Send,
-  Check,
-  DollarSign,
-  Receipt,
-  Gavel,
-} from 'lucide-react';
+import { AdminDashboardTab } from './admin/AdminDashboardTab.js';
+import { AdminServicosTab } from './admin/AdminServicosTab.js';
+import { AdminAutomacoesTab } from './admin/AdminAutomacoesTab.js';
+import { ArrowRightLeft, Search, RefreshCw, Download, Plus, X, Check } from 'lucide-react';
+
+type AdminTab = 'dashboard' | 'processos' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
 
 interface AdminConsoleProps {
-  activeTab: 'processos' | 'financeiro' | 'operacao' | 'registros' | 'controle' | 'config';
-  onSelectTab?: (tab: 'processos' | 'financeiro' | 'operacao' | 'controle' | 'config') => void;
+  activeTab: AdminTab;
+  onSelectTab?: (tab: AdminTab) => void;
   lotes: Lote[];
   registros: Registro[];
   submissoes?: Submissao[];
@@ -57,9 +39,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   onRefreshData,
 }) => {
   const [unmaskedDocs, setUnmaskedDocs] = useState<Record<string, string>>({});
-  const [selectedQueueItem, setSelectedQueueItem] = useState<Registro | null>(
-    registros.find((r) => r.process_status === 'aguardando_pagamento') || null
-  );
 
   // Seleção múltipla para ações em lote (idêntico ao Parceiro)
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -94,31 +73,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       }
     } catch {
       alert('Erro de conexão ao revelar documento.');
-    }
-  };
-
-  // Conciliação de comprovante manual
-  const handleConciliar = async (regId: string, aprovar: boolean) => {
-    try {
-      const nextStatus = aprovar ? 'pago' : 'reprovado';
-      const motivo = aprovar
-        ? 'Comprovante conferido e aprovado pelo operador na fila de conciliação'
-        : 'Comprovante ilegível ou divergente recusado pelo operador';
-
-      const res = await fetch(`/api/registros/${regId}/transition`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paraStatus: nextStatus, motivo }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        onRefreshData();
-        setSelectedQueueItem(null);
-      } else {
-        alert(data.error || 'Erro ao processar conciliação.');
-      }
-    } catch {
-      alert('Erro ao enviar decisão.');
     }
   };
 
@@ -224,9 +178,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     document.body.removeChild(link);
   };
 
-  const queueItems = registros.filter((r) => r.process_status === 'aguardando_pagamento');
-  const pagosCount = registros.filter((r) => r.process_status === 'pago').length;
-  const protocoladosCount = registros.filter((r) => r.process_status === 'protocolado').length;
   const baixadosCount = registros.filter((r) => r.process_status === 'baixado').length;
 
   const filteredRegistros = useMemo(() => {
@@ -308,395 +259,27 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         </div>
       </div>
 
-      {/* 2. Stepper de Navegação e Módulos (4 Passos no mesmo padrão do Parceiro) */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 items-center">
-          {/* Passo 1: Processos (Ações Coletivas) */}
-          <button
-            type="button"
-            onClick={() => onSelectTab?.('processos')}
-            className={`flex items-center gap-3 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
-              activeTab === 'processos' || activeTab === 'registros'
-                ? 'bg-[#148296]/10 ring-1 ring-[#148296]/40 shadow-2xs'
-                : 'hover:bg-slate-50'
-            }`}
-          >
-            <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs transition-colors ${
-                activeTab === 'processos' || activeTab === 'registros'
-                  ? 'bg-[#148296] text-white'
-                  : 'bg-slate-100 text-slate-500 border border-slate-200'
-              }`}
-            >
-              1
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">1. Processos (Ações)</p>
-              <p className="text-[11px] text-slate-500">{lotes.length} ações coletivas</p>
-            </div>
-          </button>
-
-          {/* Passo 2: Financeiro & Conciliação */}
-          <button
-            type="button"
-            onClick={() => onSelectTab?.('financeiro')}
-            className={`flex items-center gap-3 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
-              activeTab === 'financeiro'
-                ? 'bg-[#148296]/10 ring-1 ring-[#148296]/40 shadow-2xs'
-                : 'hover:bg-slate-50'
-            }`}
-          >
-            <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs transition-colors ${
-                activeTab === 'financeiro'
-                  ? 'bg-[#148296] text-white'
-                  : submissoes.filter((s) => s.payment_status === 'pendente').length > 0
-                  ? 'bg-amber-500 text-white animate-pulse'
-                  : 'bg-slate-100 text-slate-500 border border-slate-200'
-              }`}
-            >
-              2
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">2. Financeiro</p>
-              <p className="text-[11px] text-slate-500">
-                {submissoes.filter((s) => s.payment_status === 'pendente').length > 0
-                  ? `${submissoes.filter((s) => s.payment_status === 'pendente').length} comprovante(s)`
-                  : 'Faturamento & extrato'}
-              </p>
-            </div>
-          </button>
-
-          {/* Passo 3: Operação e Lotes */}
-          <button
-            type="button"
-            onClick={() => onSelectTab?.('operacao')}
-            className={`flex items-center gap-3 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
-              activeTab === 'operacao'
-                ? 'bg-[#148296]/10 ring-1 ring-[#148296]/40 shadow-2xs'
-                : 'hover:bg-slate-50'
-            }`}
-          >
-            <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs transition-colors ${
-                activeTab === 'operacao'
-                  ? 'bg-[#148296] text-white'
-                  : queueItems.length > 0
-                  ? 'bg-amber-500 text-white animate-pulse'
-                  : 'bg-slate-100 text-slate-500 border border-slate-200'
-              }`}
-            >
-              3
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">3. Operação & Lotes</p>
-              <p className="text-[11px] text-slate-500">
-                {queueItems.length > 0
-                  ? `${queueItems.length} na fila`
-                  : 'Gates de corte & checklist'}
-              </p>
-            </div>
-          </button>
-
-          {/* Passo 4: Auditoria Imutável */}
-          <button
-            type="button"
-            onClick={() => onSelectTab?.('controle')}
-            className={`flex items-center gap-3 p-2.5 rounded-xl text-left transition-all cursor-pointer ${
-              activeTab === 'controle'
-                ? 'bg-[#148296]/10 ring-1 ring-[#148296]/40 shadow-2xs'
-                : 'hover:bg-slate-50'
-            }`}
-          >
-            <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs transition-colors ${
-                activeTab === 'controle'
-                  ? 'bg-[#148296] text-white'
-                  : 'bg-slate-100 text-slate-500 border border-slate-200'
-              }`}
-            >
-              4
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">4. Trilha de Auditoria</p>
-              <p className="text-[11px] text-slate-500">{auditLogs.length} eventos registrados</p>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* 3. Aviso de Pendência (Idêntico ao card de pagamento pendente do Parceiro) */}
-      {queueItems.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-amber-500/20 text-amber-700 flex items-center justify-center shrink-0">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-amber-900">
-                Fila de Conciliação Pendente ({queueItems.length} comprovante{queueItems.length > 1 ? 's' : ''})
-              </h4>
-              <p className="text-xs text-amber-700">
-                Comprovantes aguardam validação do financeiro para avanço no protocolo judicial da Ação 124.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => onSelectTab?.('operacao')}
-              className="px-4 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
-            >
-              <FileText className="w-4 h-4" />
-              Conferir Comprovantes
-            </button>
-          </div>
-        </div>
+      {/* ==================================================== */}
+      {/* ABA: DASHBOARD                                       */}
+      {/* ==================================================== */}
+      {activeTab === 'dashboard' && (
+        <AdminDashboardTab lotes={lotes} registros={registros} submissoes={submissoes} />
       )}
 
       {/* ==================================================== */}
-      {/* ABA 1: OPERAÇÃO (FILAS & LOTES)                       */}
+      {/* ABA: SERVIÇOS                                        */}
       {/* ==================================================== */}
-      {activeTab === 'operacao' && (
-        <div className="space-y-6">
-          {/* Métricas Principais em 4 Cards no estilo do Parceiro */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Fila de Conciliação
-              </span>
-              <p className="text-2xl font-black text-slate-900 mt-1">
-                {queueItems.length}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-1">
-                {queueItems.length === 0 ? 'Fila 100% zerada' : 'Aguardando conferência'}
-              </p>
-            </div>
+      {activeTab === 'servicos' && <AdminServicosTab />}
 
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Lote Ativo Vigente
-              </span>
-              <p className="text-2xl font-black text-[#148296] mt-1">
-                {loteVigente?.codigo || 'AC 124'}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-1">Preço fixo: R$ 55,00/nome</p>
-            </div>
-
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Pagos / Prontos
-              </span>
-              <p className="text-2xl font-black text-emerald-600 mt-1">
-                {pagosCount}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-1">Prontos para protocolo em juízo</p>
-            </div>
-
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                Conformidade LGPD
-              </span>
-              <div className="mt-2 flex items-center gap-2">
-                <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  ✔ Trilha I2, I6 Ativa
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 mt-1">Segurança e rastreabilidade</p>
-            </div>
-          </div>
-
-          {/* Painel da Fila de Conciliação em 2 Colunas */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">
-                  Fila de Conciliação de Comprovantes
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Conferência assistida de depósitos bancários e PIX para liberação de protocolo
-                </p>
-              </div>
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                {queueItems.length} pendente(s)
-              </span>
-            </div>
-
-            {queueItems.length === 0 ? (
-              <div className="p-12 text-center text-xs text-slate-400">
-                <CheckCircle className="w-10 h-10 text-emerald-500 mx-auto mb-2 opacity-80" />
-                <p className="font-bold text-slate-700 text-sm">Nenhum comprovante pendente no momento!</p>
-                <p className="mt-1">Todas as conciliações foram concluídas com sucesso.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[380px]">
-                {/* Coluna Esquerda: Itens da Fila */}
-                <div className="lg:col-span-5 border-r border-slate-100 divide-y divide-slate-100 overflow-y-auto">
-                  {queueItems.map((item) => {
-                    const isSelected = selectedQueueItem?.id === item.id;
-                    return (
-                      <div
-                        key={item.id}
-                        onClick={() => setSelectedQueueItem(item)}
-                        className={`p-4 cursor-pointer transition-all ${
-                          isSelected
-                            ? 'bg-[#148296]/10 border-l-4 border-l-[#148296]'
-                            : 'hover:bg-slate-50/80'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="font-bold text-xs text-slate-900">{item.nome}</span>
-                          <span className="text-xs font-black text-emerald-700 font-mono">
-                            {formatCurrencyBRL(item.unit_price)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-[11px] text-slate-500">
-                          <span className="font-mono text-slate-600">{item.cpf_cnpj}</span>
-                          <span className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full font-bold">
-                            Comprovante Anexado
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Coluna Direita: Item Ativo & Visualizador do Comprovante */}
-                <div className="lg:col-span-7 p-6 flex flex-col justify-between bg-slate-50/40">
-                  {selectedQueueItem ? (
-                    <div className="space-y-4 flex-1">
-                      <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                        <div>
-                          <h5 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                            Conferência de Comprovante
-                          </h5>
-                          <p className="text-base font-bold text-slate-900">{selectedQueueItem.nome}</p>
-                        </div>
-                        <StatusBadge status={selectedQueueItem.process_status} />
-                      </div>
-
-                      {/* Visualizador de Comprovante */}
-                      <div className="bg-white border-2 border-dashed border-slate-200 rounded-xl p-6 text-center shadow-2xs">
-                        <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-                          <FileText className="w-6 h-6" />
-                        </div>
-                        <p className="text-xs font-bold text-slate-800">comprovante_pix_transferencia.pdf</p>
-                        <p className="text-xs text-slate-600 mt-1">
-                          Valor no documento:{' '}
-                          <strong className="text-emerald-700 font-mono">
-                            {formatCurrencyBRL(selectedQueueItem.unit_price)}
-                          </strong>{' '}
-                          • Banco: 260 Nu Pagamentos
-                        </p>
-                        <p className="text-[10px] text-slate-400 mt-2 font-mono bg-slate-50 py-1 px-2 rounded inline-block border border-slate-200">
-                          Hash de Validação: 89f41a02b37c... (Conferido com o banco)
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 text-xs bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                        <div>
-                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">
-                            Valor Esperado
-                          </span>
-                          <span className="font-extrabold text-slate-900 font-mono text-sm">
-                            {formatCurrencyBRL(selectedQueueItem.unit_price)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">
-                            Origem do Envio
-                          </span>
-                          <span className="font-semibold text-[#148296]">
-                            Rdz Consultoria (#parc-001)
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Botões de Ação com o mesmo layout e classes do Portal do Parceiro */}
-                      <div className="pt-4 flex items-center justify-end gap-2.5 border-t border-slate-200">
-                        <button
-                          type="button"
-                          onClick={() => handleConciliar(selectedQueueItem.id, false)}
-                          className="px-3.5 py-2 text-xs font-bold text-rose-700 bg-white hover:bg-rose-50 border border-rose-300 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <XCircle className="w-4 h-4" />
-                          Reprovar Pagamento [R]
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleConciliar(selectedQueueItem.id, true)}
-                          className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <CheckCircle className="w-4 h-4" />
-                          Aprovar Pagamento [A]
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-xs text-slate-400 py-12">
-                      <FileText className="w-8 h-8 text-slate-300 mb-2" />
-                      <span>Selecione um item da fila ao lado para conferir o comprovante.</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Checklist de Encerramento do Lote (Gates Operacionais) */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h4 className="text-sm font-bold text-slate-900 uppercase tracking-wide flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[#148296]" />
-                Gates de Encerramento — AÇÃO COLETIVA 124
-              </h4>
-              <span className="text-xs font-semibold text-slate-500">
-                Lote vigente com prazo limite às 19:00h
-              </span>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
-                <div className="flex items-center gap-2.5 text-emerald-900 font-medium">
-                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{pagosCount} registros pagos e conciliados prontos para protocolo em birôs</span>
-                </div>
-                <span className="text-[10px] font-bold uppercase text-emerald-800 bg-white border border-emerald-200 px-2 py-0.5 rounded-md">
-                  Aprovado
-                </span>
-              </div>
-
-              {queueItems.length > 0 ? (
-                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between">
-                  <div className="flex items-center gap-2.5 text-amber-900 font-medium">
-                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>{queueItems.length} comprovante(s) aguardando conferência na fila de conciliação</span>
-                  </div>
-                  <span className="text-[10px] font-bold uppercase text-amber-800 bg-white border border-amber-200 px-2 py-0.5 rounded-md">
-                    Bloqueante
-                  </span>
-                </div>
-              ) : (
-                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
-                  <div className="flex items-center gap-2.5 text-emerald-900 font-medium">
-                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Nenhum comprovante pendente. Fila zerada com sucesso.</span>
-                  </div>
-                  <span className="text-[10px] font-bold uppercase text-emerald-800 bg-white border border-emerald-200 px-2 py-0.5 rounded-md">
-                    Pronto
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ==================================================== */}
+      {/* ABA: AUTOMAÇÕES                                      */}
+      {/* ==================================================== */}
+      {activeTab === 'automacoes' && <AdminAutomacoesTab />}
 
       {/* ==================================================== */}
       {/* ABA: PROCESSOS & AÇÕES COLETIVAS (ADMIN)             */}
       {/* ==================================================== */}
-      {(activeTab === 'processos' || activeTab === 'registros') && (
+      {activeTab === 'processos' && (
         <AdminProcessosTab
           lotes={lotes}
           registros={registros}

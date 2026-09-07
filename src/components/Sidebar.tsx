@@ -5,7 +5,6 @@ import {
   ShieldCheck,
   Search,
   Layers,
-  Receipt,
   Building2,
   Lock,
   ShoppingBag,
@@ -17,13 +16,16 @@ import {
   Check,
   ChevronRight,
   Settings,
+  Zap,
 } from 'lucide-react';
 
 interface SidebarProps {
   currentSurface: 'parceiro' | 'admin' | 'publico';
   onSelectSurface: (surface: 'parceiro' | 'admin' | 'publico') => void;
-  adminTab: 'processos' | 'financeiro' | 'operacao' | 'registros' | 'controle' | 'config';
-  onSelectAdminTab: (tab: 'processos' | 'financeiro' | 'operacao' | 'controle' | 'config') => void;
+  adminTab: 'dashboard' | 'processos' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
+  onSelectAdminTab: (
+    tab: 'dashboard' | 'processos' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle',
+  ) => void;
   parceiroTab?: string;
   onSelectParceiroTab?: (tab: string) => void;
   session: UserSession | null;
@@ -189,16 +191,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <p className="text-[10px] font-bold text-white/60 uppercase tracking-wider px-3 mb-1.5">
                 PAINEL ADMINISTRATIVO
               </p>
+
               <button
-                onClick={() => onSelectAdminTab('processos')}
+                onClick={() => onSelectAdminTab('dashboard')}
                 className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  adminTab === 'processos' || adminTab === 'registros'
+                  adminTab === 'dashboard'
                     ? 'bg-[#0c4f5d] font-bold text-white shadow-2xs'
                     : 'text-white/80 hover:bg-white/10 hover:text-white'
                 }`}
               >
-                <Layers className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
-                <span>Processos (Ações Coletivas)</span>
+                <LayoutDashboard className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
+                <span>Dashboard</span>
               </button>
 
               <button
@@ -210,19 +213,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }`}
               >
                 <DollarSign className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
-                <span>Financeiro & Conciliação</span>
+                <span>Financeiro</span>
               </button>
 
               <button
-                onClick={() => onSelectAdminTab('operacao')}
+                onClick={() => onSelectAdminTab('processos')}
                 className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  adminTab === 'operacao'
+                  adminTab === 'processos'
                     ? 'bg-[#0c4f5d] font-bold text-white shadow-2xs'
                     : 'text-white/80 hover:bg-white/10 hover:text-white'
                 }`}
               >
-                <Receipt className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
-                <span>Operação & Lotes</span>
+                <Layers className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
+                <span>Processos</span>
+              </button>
+
+              <button
+                onClick={() => onSelectAdminTab('servicos')}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
+                  adminTab === 'servicos'
+                    ? 'bg-[#0c4f5d] font-bold text-white shadow-2xs'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <ShoppingBag className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
+                <span>Serviços</span>
+              </button>
+
+              <button
+                onClick={() => onSelectAdminTab('automacoes')}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
+                  adminTab === 'automacoes'
+                    ? 'bg-[#0c4f5d] font-bold text-white shadow-2xs'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Zap className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
+                <span>Automações</span>
               </button>
 
               <button

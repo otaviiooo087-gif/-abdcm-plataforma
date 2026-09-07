@@ -208,3 +208,52 @@ export interface Contrato {
   conteudo_base64: string;
   atualizado_em: string;
 }
+
+export type PixCobrancaStatus = 'pendente' | 'pago' | 'expirado' | 'cancelado';
+
+// Cobrança PIX real emitida pelo provedor (Asaas) ou simulada (mock) para uma submissão.
+export interface PixCobranca {
+  id: string;
+  tenant_id: string;
+  submissao_id: string;
+  provider: string;
+  txid: string;
+  qr_code_base64?: string | null;
+  copia_e_cola: string;
+  valor: number; // centavos
+  status: PixCobrancaStatus;
+  expira_em: string;
+  criado_em: string;
+  confirmado_em?: string | null;
+}
+
+// Tipos de aviso automático de WhatsApp — cada um vira uma linha configurável na aba Automações.
+export type TipoNotificacao =
+  | 'proximo_lote'
+  | 'follow_up_lista'
+  | 'status_processo'
+  | 'pagamento_pendente';
+
+// Registro de envio (log + chave de deduplicação do motor de automação).
+export interface NotificacaoEnviada {
+  id: string;
+  tenant_id: string;
+  tipo: TipoNotificacao;
+  destinatario_telefone: string;
+  associado_id?: string | null;
+  referencia_tipo?: string | null;
+  referencia_id?: string | null;
+  mensagem: string;
+  provider_message_id?: string | null;
+  status: string;
+  enviado_em: string;
+}
+
+// Liga/desliga e parâmetros de cada regra de automação, editável na aba Automações.
+export interface AutomacaoConfig {
+  chave: TipoNotificacao;
+  tenant_id: string;
+  ativo: boolean;
+  config: Record<string, unknown>;
+  atualizado_em: string;
+}

@@ -9,6 +9,9 @@ interface PixPagamentoModalProps {
   pixPayload?: string;
   submissaoId?: string;
   onSimulatePaid?: () => void;
+  /** false quando o PIX é gerado por um provedor real (Asaas) — nesse caso o parceiro
+   * não pode se auto-confirmar, só o webhook do banco confirma o pagamento de verdade. */
+  permitirSimular?: boolean;
 }
 
 export const PixPagamentoModal: React.FC<PixPagamentoModalProps> = ({
@@ -18,6 +21,7 @@ export const PixPagamentoModal: React.FC<PixPagamentoModalProps> = ({
   pixPayload = '00020101021226800014br.gov.bcb.pix2558pix.abdcm.org.br/qr/v2/cobv/912849182301982340982352040000530398654054750.005802BR5925ABDCM COLETIVA LTDA6009SAO PAULO62070503***6304ABCD',
   submissaoId,
   onSimulatePaid,
+  permitirSimular = true,
 }) => {
   const [copied, setCopied] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
@@ -124,14 +128,16 @@ export const PixPagamentoModal: React.FC<PixPagamentoModalProps> = ({
                 <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#148296]" />
                 <span>Aguardando confirmação do pagamento...</span>
               </div>
-              <button
-                type="button"
-                onClick={handleSimulate}
-                disabled={isSimulating}
-                className="text-[11px] font-semibold text-[#148296] hover:underline cursor-pointer"
-              >
-                {isSimulating ? 'Confirmando...' : '⚡ Simular Pagamento Aprovado'}
-              </button>
+              {permitirSimular && (
+                <button
+                  type="button"
+                  onClick={handleSimulate}
+                  disabled={isSimulating}
+                  className="text-[11px] font-semibold text-[#148296] hover:underline cursor-pointer"
+                >
+                  {isSimulating ? 'Confirmando...' : '⚡ Simular Pagamento Aprovado'}
+                </button>
+              )}
             </div>
           )}
         </div>
