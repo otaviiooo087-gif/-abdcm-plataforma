@@ -3,6 +3,7 @@
  * Conforme diretrizes de Full-Stack e Invariante I1 (nenhuma regra no cliente).
  */
 
+import { config } from 'dotenv';
 import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
@@ -22,6 +23,12 @@ function dispararAvisosDeStatus(registros: Registro[], novoStatus: string): void
       console.error(`[automacoes] falha ao avisar status "${novoStatus}" do registro ${registro.id}:`, err);
     });
   }
+}
+
+// Em produção o DATABASE_URL (e demais segredos) vem de variável de ambiente
+// real da plataforma de deploy — I10. Em dev local, carrega do .env.local.
+if (process.env.NODE_ENV !== 'production') {
+  config({ path: '.env.local' });
 }
 
 async function startServer() {
@@ -83,6 +90,49 @@ async function startServer() {
   // 2. Lotes
   app.get('/api/lotes', async (_req: Request, res: Response) => {
     res.json(await serverStore.getLotes());
+  });
+
+  // 2.0.1 Criar uma nova Ação Coletiva — admin. O protocolo (AAAA-MM-DD) é
+  // sempre gerado no servidor a partir da data de criação, nunca aceito do
+  // cliente (I1).
+  app.post('/api/lotes', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM cria Ações Coletivas.' });
+        return;
+      }
+      const { nome, codigo, numeroProcesso, abreEm, closesAt, precoPorNome, bureaus } = req.body;
+      if (!nome || typeof nome !== 'string' || !nome.trim()) {
+        res.status(400).json({ error: 'Nome da Ação Coletiva é obrigatório.' });
+        return;
+      }
+      if (!abreEm || !closesAt) {
+        res.status(400).json({ error: 'Informe a data de início e de encerramento.' });
+        return;
+      }
+      if (!Number.isInteger(precoPorNome) || precoPorNome <= 0) {
+        res.status(400).json({ error: 'Preço por nome inválido.' });
+        return;
+      }
+      if (!Array.isArray(bureaus) || bureaus.length === 0) {
+        res.status(400).json({ error: 'Selecione ao menos um órgão de proteção ao crédito.' });
+        return;
+      }
+      const lote = await serverStore.createLote(session.id, {
+        nome: nome.trim(),
+        codigo: typeof codigo === 'string' ? codigo.trim() : null,
+        numeroProcesso: typeof numeroProcesso === 'string' ? numeroProcesso.trim() : null,
+        abreEm,
+        closesAt,
+        precoPorNome,
+        bureaus,
+      });
+      res.status(201).json(lote);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao criar Ação Coletiva';
+      res.status(400).json({ error: msg });
+    }
   });
 
   // 2.1 Atualizar configuração do lote (ex.: prazo de encerramento) — admin
