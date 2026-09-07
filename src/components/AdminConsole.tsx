@@ -298,7 +298,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ==================================================== */}
       {/* ABA: ASSOCIADOS (ADMIN)                              */}
       {/* ==================================================== */}
-      {activeTab === 'associados' && <AdminAssociadosTab associados={associados} registros={registros} />}
+      {activeTab === 'associados' && (
+        <AdminAssociadosTab associados={associados} registros={registros} lotes={lotes} onRefreshData={onRefreshData} />
+      )}
 
       {/* ==================================================== */}
       {/* ABA: FINANCEIRO & CONCILIAÇÃO BANCÁRIA (ADMIN)       */}

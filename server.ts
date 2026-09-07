@@ -413,6 +413,28 @@ async function startServer() {
     }
   });
 
+  // 6.0.2 Bloquear/reativar acesso do associado — exige reason_code (I11)
+  app.patch('/api/associados/:id/status', async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM altera o acesso de associados.' });
+      return;
+    }
+    try {
+      const { status, reasonCode, observacao } = req.body;
+      if (status !== 'ativo' && status !== 'inativo') {
+        res.status(400).json({ error: 'Status inválido.' });
+        return;
+      }
+      const associado = await serverStore.updateAssociadoStatus(id, status, reasonCode, session.id, observacao);
+      res.json(associado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar status do associado';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 6.1 Contestações ("Reclame Aqui")
   app.get('/api/contestacoes', async (_req: Request, res: Response) => {
     const session = serverStore.getSession();

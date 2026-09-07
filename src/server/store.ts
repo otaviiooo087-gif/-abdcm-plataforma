@@ -933,6 +933,49 @@ async function revealAssociadoCpf(associadoId: string, userId: string): Promise<
   return associado.cpfCnpjRaw;
 }
 
+const ASSOCIADO_STATUS_REASON_CODES = [
+  'solicitacao_associado',
+  'suspeita_fraude',
+  'documentacao_invalida',
+  'duplicidade',
+  'reativacao_apos_revisao',
+  'outro',
+] as const;
+
+/** Bloqueia ou reativa o acesso de um associado (status_filiacao ativo/inativo)
+ * — ação administrativa que exige reason_code de lista fechada + observação (I11). */
+async function updateAssociadoStatus(
+  associadoId: string,
+  novoStatus: 'ativo' | 'inativo',
+  reasonCode: string,
+  atorUserId: string,
+  observacao?: string,
+): Promise<Associado> {
+  if (!ASSOCIADO_STATUS_REASON_CODES.includes(reasonCode as (typeof ASSOCIADO_STATUS_REASON_CODES)[number])) {
+    throw new Error('Motivo inválido.');
+  }
+  const [atual] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
+  if (!atual) throw new Error('Associado não localizado.');
+
+  await db().update(schema.associados).set({ statusFiliacao: novoStatus }).where(eq(schema.associados.id, associadoId));
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: atual.tenantId,
+    atorUserId,
+    acao: novoStatus === 'inativo' ? 'ASSOCIADO_ACESSO_BLOQUEADO' : 'ASSOCIADO_ACESSO_REATIVADO',
+    entidadeTipo: 'associados',
+    entidadeId: associadoId,
+    antes: { statusFiliacao: atual.statusFiliacao },
+    depois: { statusFiliacao: novoStatus, reasonCode, observacao: observacao?.trim() || null },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: new Date().toISOString(),
+  });
+
+  return associadoDeLinha({ ...atual, statusFiliacao: novoStatus });
+}
+
 /** Atualiza dados de configuração do lote (ex.: prazo de encerramento) — só admin usa. */
 async function updateLote(
   id: string,
@@ -1716,6 +1759,7 @@ export const serverStore = {
   transitionStatus,
   revealDocument,
   revealAssociadoCpf,
+  updateAssociadoStatus,
   updateLote,
   createLote,
   encerrarLote,
