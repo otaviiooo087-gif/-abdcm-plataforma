@@ -317,8 +317,6 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   // Métricas
   const pendentesCount = registros.filter((r) => r.process_status === 'pendente').length;
   const enviadosCount = registros.filter((r) => r.process_status === 'enviado').length;
-  const pagosCount = registros.filter((r) => r.process_status === 'pago').length;
-  const baixadosCount = registros.filter((r) => r.process_status === 'baixado').length;
 
   const totalNomes = registrosNaoPagos.length;
   const totalValor = totalNomes * precoUnitario;
@@ -979,42 +977,41 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         </div>
       </div>
 
-      {/* 2. Stepper do Processo (4 Passos do Fluxo Limpa Nome) — cinza até o
-          passo ser alcançado, vira verde (com animação) assim que o parceiro
-          completa cada etapa; a linha entre os passos acompanha o progresso. */}
+      {/* 2. Stepper do Processo (4 Passos do Fluxo Limpa Nome) — cada passo
+          fica cinza até ser concluído e só então vira verde (com animação).
+          É escopado ao ciclo atual (nomes ainda não pagos): assim que o
+          pagamento é aprovado, esses nomes saem da tela (viram card em
+          Minhas Listas) e o stepper reinicia sozinho pra próxima anexação
+          de lista, em vez de ficar todo verde permanentemente. */}
       {(() => {
-        const algumEnviado = registros.some((r) => r.process_status !== 'pendente');
-        const algumPago = registros.some((r) =>
-          ['pago', 'aguardando_protocolo', 'protocolado', 'baixado'].includes(r.process_status),
-        );
+        const algumEnviadoNoCiclo = registrosNaoPagos.some((r) => r.process_status !== 'pendente');
         const passos = [
           {
             numero: 1,
             titulo: 'Cadastrar Nomes',
             subtitulo: 'Insira nomes ou importe lista',
-            concluido: registros.length > 0,
-            emAndamento: registros.length === 0,
+            concluido: registrosNaoPagos.length > 0,
           },
           {
             numero: 2,
             titulo: 'Enviar Lista',
             subtitulo: 'Confirme o envio da lista ativa',
-            concluido: algumEnviado,
-            emAndamento: !algumEnviado && registros.length > 0,
+            concluido: algumEnviadoNoCiclo,
           },
           {
             numero: 3,
             titulo: 'Pagamento PIX',
             subtitulo: 'Pague via PIX instantâneo',
-            concluido: algumPago,
-            emAndamento: !algumPago && Boolean(pendingSubmissao),
+            // O pagamento em si já ganha o popup de comemoração à parte —
+            // aqui ele fica verde nesse mesmo instante e depois reinicia
+            // junto com os outros passos assim que a próxima lista começa.
+            concluido: showSucessoModal,
           },
           {
             numero: 4,
             titulo: 'Processamento',
             subtitulo: 'Acompanhe protocolo e baixa',
-            concluido: baixadosCount > 0,
-            emAndamento: false,
+            concluido: showSucessoModal,
           },
         ];
 
@@ -1023,8 +1020,6 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
             className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs transition-all duration-500 ${
               passo.concluido
                 ? 'bg-emerald-600 text-white scale-105'
-                : passo.emAndamento
-                ? 'bg-[#148296] text-white animate-pulse'
                 : 'bg-slate-100 text-slate-500 border border-slate-200'
             }`}
           >
