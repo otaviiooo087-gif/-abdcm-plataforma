@@ -304,8 +304,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         : registros.filter((r) => r.process_status === 'pendente').map((r) => r.id);
 
     if (idsToSend.length === 0) {
-      alert('Nenhum registro pendente para enviar.');
-      return;
+      throw new Error('Nenhum registro pendente para enviar.');
     }
 
     const res = await fetch('/api/submissoes', {
@@ -314,18 +313,20 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
       body: JSON.stringify({ registroIds: idsToSend }),
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      setActiveSubmissao(data.submissao);
-      setActivePixPayload(data.pixCobranca?.copia_e_cola);
-      setShowPixModal(true);
-      setSelectedIds([]);
-      loadSubmissoes();
-      onRefreshData?.();
-    } else {
-      const err = await res.json();
-      alert(err.error || 'Erro ao submeter lote');
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      // Lança pro modal de confirmação: ele precisa saber que falhou pra
+      // não fechar sozinho e mostrar o erro, em vez de sumir sem enviar nada.
+      throw new Error(err?.error || 'Erro ao submeter lote. Tente novamente.');
     }
+
+    const data = await res.json();
+    setActiveSubmissao(data.submissao);
+    setActivePixPayload(data.pixCobranca?.copia_e_cola);
+    setShowPixModal(true);
+    setSelectedIds([]);
+    loadSubmissoes();
+    onRefreshData?.();
   };
 
   // Cancelamento de submissão
