@@ -185,6 +185,20 @@ export const notificacoesEnviadas = pgTable('notificacoes_enviadas', {
   enviadoEm: timestamp('enviado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
+export const documentosAssociado = pgTable('documentos_associado', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  associadoId: text('associado_id').notNull(),
+  tipo: text('tipo').notNull(),
+  storageKey: text('storage_key').notNull(),
+  storageProvider: text('storage_provider').notNull(),
+  mimeType: text('mime_type').notNull(),
+  nomeArquivo: text('nome_arquivo').notNull(),
+  tamanhoBytes: integer('tamanho_bytes'),
+  enviadoPorUserId: text('enviado_por_user_id'),
+  enviadoEm: timestamp('enviado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
 export const automacoesConfig = pgTable('automacoes_config', {
   chave: text('chave').primaryKey(),
   tenantId: text('tenant_id').notNull(),

@@ -11,7 +11,9 @@ import { cleanDocument } from './src/lib/masking/documentMasker';
 import { avisarStatusProcesso, rodarAutomacoes } from './src/server/notificacoes';
 import { pixProviderConfigurado } from './src/integrations/pix/index';
 import { whatsAppProviderConfigurado } from './src/integrations/whatsapp/index';
+import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integrations/storage/index';
 import type { Registro } from './src/domain/types';
+import { promises as fs } from 'node:fs';
 
 /** Dispara avisos de status por WhatsApp sem segurar a resposta HTTP — falha vira só um log. */
 function dispararAvisosDeStatus(registros: Registro[], novoStatus: string): void {
@@ -29,6 +31,34 @@ async function startServer() {
   // Limite elevado por causa do upload do contrato-modelo em base64 (padrão do
   // Express é 100kb, pequeno demais até pra um PDF simples de poucas páginas).
   app.use(express.json({ limit: '15mb' }));
+
+  // Rotas de armazenamento mock (só existem quando não há R2 configurado —
+  // ver src/integrations/storage). Simulam PUT/GET assinado guardando em
+  // disco local, só pra testar o fluxo com poucos arquivos em dev; em
+  // produção com R2 configurado o navegador nunca passa por aqui.
+  app.put('/api/storage/mock/*', express.raw({ type: '*/*', limit: '20mb' }), async (req: Request, res: Response) => {
+    try {
+      const key = (req.params as unknown as { 0: string })[0];
+      const destino = caminhoLocalSeguro(key);
+      await fs.mkdir(path.dirname(destino), { recursive: true });
+      await fs.writeFile(destino, req.body);
+      res.status(200).json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gravar arquivo (mock storage)';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/storage/mock/*', async (req: Request, res: Response) => {
+    try {
+      const key = (req.params as unknown as { 0: string })[0];
+      const origem = caminhoLocalSeguro(key);
+      const conteudo = await fs.readFile(origem);
+      res.send(conteudo);
+    } catch {
+      res.status(404).json({ error: 'Arquivo não encontrado (mock storage).' });
+    }
+  });
 
   // ==========================================
   // API ROUTES (Validação estrita no servidor)
@@ -425,6 +455,7 @@ async function startServer() {
     res.json({
       pix: { provider: 'asaas', configurado: pixProviderConfigurado() },
       whatsapp: { provider: 'z-api', configurado: whatsAppProviderConfigurado() },
+      storage: { provider: 'r2', configurado: storageProviderConfigurado() },
     });
   });
 
@@ -465,6 +496,79 @@ async function startServer() {
       res.json(resultado);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao rodar automações';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.8 Documentos do associado (CNH/RG) — upload em massa direto pro storage.
+  // O servidor nunca recebe o arquivo: só confere o CPF (preview), autoriza
+  // o upload (presign) e registra depois que o navegador já mandou (confirmar).
+  app.post('/api/documentos/preview', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      const { cpfsCnpjs } = req.body;
+      if (!Array.isArray(cpfsCnpjs)) {
+        res.status(400).json({ error: 'cpfsCnpjs deve ser uma lista.' });
+        return;
+      }
+      const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+      const resultado = await serverStore.previewDocumentos(cpfsCnpjs, parceiroId);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao conferir documentos';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/documentos/presign', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      const { associadoId, tipo, mimeType } = req.body;
+      const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+      const resultado = await serverStore.presignDocumentoUpload(associadoId, tipo, mimeType, parceiroId);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao autorizar upload';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/documentos/confirmar', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      const { associadoId, tipo, key, mimeType, nomeArquivo, tamanhoBytes } = req.body;
+      const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+      await serverStore.confirmarDocumentoUpload({
+        associadoId,
+        tipo,
+        key,
+        mimeType,
+        nomeArquivo,
+        tamanhoBytes,
+        atorUserId: session.id,
+        parceiroId,
+      });
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao confirmar upload';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/documentos/status', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+    res.json(await serverStore.getDocumentosStatus(parceiroId));
+  });
+
+  app.get('/api/associados/:id/documentos/:tipo/download', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+      const url = await serverStore.getDocumentoDownloadUrl(req.params.id, req.params.tipo as 'cnh' | 'rg', session.id, parceiroId);
+      res.json({ url });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar link de download';
       res.status(400).json({ error: msg });
     }
   });
