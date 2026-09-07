@@ -153,6 +153,25 @@ async function startServer() {
     }
   });
 
+  // 2.2 Encerrar Ação Coletiva: bloqueia novos envios, gera o pacote
+  // (planilha + documentos anexados, em um único ZIP) e avisa a equipe
+  // ABDCM no WhatsApp — admin confirma manualmente, não dispara sozinho.
+  app.post('/api/lotes/:id/encerrar', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM encerra Ações Coletivas.' });
+        return;
+      }
+      const { id } = req.params;
+      const resultado = await serverStore.encerrarLote(id, session.id);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao encerrar Ação Coletiva';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 3. Associados
   app.get('/api/associados', async (_req: Request, res: Response) => {
     const session = serverStore.getSession();
