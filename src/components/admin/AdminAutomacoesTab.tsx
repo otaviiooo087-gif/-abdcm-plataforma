@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AutomacaoConfig, NotificacaoEnviada, TipoNotificacao } from '../../domain/types.js';
-import { Zap, MessageCircle, Clock, RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
+import { Zap, MessageCircle, Clock, RefreshCw, CheckCircle2, XCircle, Phone, Plus, Trash2 } from 'lucide-react';
 
 const METADADOS: Record<TipoNotificacao, { nome: string; descricao: string; exemplo: string; campoConfig?: { chave: string; label: string; sufixo: string } }> = {
   proximo_lote: {
@@ -29,15 +29,22 @@ const METADADOS: Record<TipoNotificacao, { nome: string; descricao: string; exem
       'Oi Ana! Vimos que o pagamento PIX da sua lista ainda está pendente. Aconteceu algum problema? Se precisar de ajuda é só responder por aqui 🙂',
     campoConfig: { chave: 'horasParaAvisar', label: 'Avisar após quantas horas pendente', sufixo: 'h' },
   },
+  lote_encerrado: {
+    nome: 'Encerramento de Ação Coletiva',
+    descricao:
+      'Avisa a equipe ABDCM (números cadastrados abaixo, não associados) quando uma Ação Coletiva é encerrada na aba Processos, com o link do pacote (planilha + documentos) pra retirar.',
+    exemplo: 'Ação Coletiva 124 encerrada! Foram 87 nomes captados. Baixe a documentação completa aqui: https://... (link válido por 7 dias)',
+  },
 };
 
-const ORDEM: TipoNotificacao[] = ['proximo_lote', 'follow_up_lista', 'status_processo', 'pagamento_pendente'];
+const ORDEM: TipoNotificacao[] = ['proximo_lote', 'follow_up_lista', 'status_processo', 'pagamento_pendente', 'lote_encerrado'];
 
 const LABEL_TIPO: Record<TipoNotificacao, string> = {
   proximo_lote: 'Próximo lote',
   follow_up_lista: 'Follow-up',
   status_processo: 'Status',
   pagamento_pendente: 'Pagamento pendente',
+  lote_encerrado: 'Encerramento de lote',
 };
 
 interface StatusIntegracoes {
@@ -51,6 +58,7 @@ export const AdminAutomacoesTab: React.FC = () => {
   const [status, setStatus] = useState<StatusIntegracoes | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [runResult, setRunResult] = useState<string | null>(null);
+  const [novoNumero, setNovoNumero] = useState('');
 
   const load = () => {
     fetch('/api/automacoes')
@@ -85,6 +93,33 @@ export const AdminAutomacoesTab: React.FC = () => {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ config: { ...config.config, [campo]: valor } }),
+    });
+    load();
+  };
+
+  const handleAddNumero = async (config: AutomacaoConfig) => {
+    const numero = novoNumero.trim();
+    if (!numero) return;
+    const numerosAtuais = Array.isArray(config.config.numeros) ? (config.config.numeros as string[]) : [];
+    if (numerosAtuais.includes(numero)) {
+      setNovoNumero('');
+      return;
+    }
+    await fetch(`/api/automacoes/${config.chave}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: { ...config.config, numeros: [...numerosAtuais, numero] } }),
+    });
+    setNovoNumero('');
+    load();
+  };
+
+  const handleRemoveNumero = async (config: AutomacaoConfig, numero: string) => {
+    const numerosAtuais = Array.isArray(config.config.numeros) ? (config.config.numeros as string[]) : [];
+    await fetch(`/api/automacoes/${config.chave}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: { ...config.config, numeros: numerosAtuais.filter((n) => n !== numero) } }),
     });
     load();
   };
@@ -206,6 +241,56 @@ export const AdminAutomacoesTab: React.FC = () => {
                   />
                   {meta.campoConfig.sufixo}
                 </label>
+              )}
+
+              {chave === 'lote_encerrado' && (
+                <div className="space-y-2">
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                    <Phone className="w-3.5 h-3.5 text-slate-400" />
+                    Números que recebem o aviso
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(Array.isArray(config.config.numeros) ? (config.config.numeros as string[]) : []).map((numero) => (
+                      <span
+                        key={numero}
+                        className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-[11px] font-mono font-semibold bg-slate-100 text-slate-700 border border-slate-200"
+                      >
+                        {numero}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveNumero(config, numero)}
+                          title="Remover número"
+                          className="p-0.5 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                    {(!Array.isArray(config.config.numeros) || config.config.numeros.length === 0) && (
+                      <span className="text-[11px] text-slate-400 italic">Nenhum número cadastrado ainda.</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={novoNumero}
+                      onChange={(e) => setNovoNumero(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleAddNumero(config);
+                      }}
+                      placeholder="+5511987654321"
+                      className="px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 w-44"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAddNumero(config)}
+                      className="px-2.5 py-1.5 text-xs font-bold text-[#148296] bg-[#148296]/10 hover:bg-[#148296]/20 rounded-lg flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Adicionar
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           );

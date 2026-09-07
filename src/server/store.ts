@@ -9,7 +9,9 @@
  * I9 (tenant_id em toda tabela).
  */
 
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
+import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { db } from './db/client.js';
 import * as schema from './db/schema.js';
 import { transitionProcessStatus } from '../domain/registros/stateMachine.js';
@@ -34,6 +36,7 @@ import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
 import { maskDocument } from '../lib/masking/documentMasker.js';
 import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
 import { getStorageProvider, storageProviderConfigurado } from '../integrations/storage/index.js';
+import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integrations/whatsapp/index.js';
 
 export { ABDCM_TENANT_ID } from './mockData.js';
 export type { UserSession } from './mockData.js';
@@ -1225,6 +1228,14 @@ export const AUTOMACOES_DISPONIVEIS: Record<
       'Oi Ana! Vimos que o pagamento PIX da sua lista ainda está pendente. Aconteceu algum problema? Se precisar de ajuda é só responder por aqui 🙂',
     configPadrao: { horasParaAvisar: 12 },
   },
+  lote_encerrado: {
+    nome: 'Encerramento de Ação Coletiva',
+    descricao:
+      'Avisa a equipe ABDCM (números cadastrados abaixo, não associados) quando uma Ação Coletiva é encerrada, com o link do pacote (planilha + documentos) pra retirar.',
+    exemplo:
+      'Ação Coletiva 124 encerrada! Foram 87 nomes captados. Baixe a documentação completa aqui: https://... (link válido por 7 dias)',
+    configPadrao: { numeros: [] },
+  },
 };
 
 export async function getAutomacoesConfig(): Promise<AutomacaoConfig[]> {
@@ -1302,6 +1313,16 @@ async function getNotificacoesLog(limite = 50): Promise<NotificacaoEnviada[]> {
 const TIPOS_DOCUMENTO = ['cnh', 'rg', 'comprovante_inscricao', 'ficha_associativa'] as const;
 type TipoDocumento = (typeof TIPOS_DOCUMENTO)[number];
 const URL_STORAGE_EXPIRA_SEGUNDOS = 15 * 60;
+
+/** As URLs do MockStorageProvider são relativas (pensadas pra o navegador
+ * resolver contra a própria origem) — em chamadas feitas pelo servidor
+ * (como montar o pacote do lote) precisam virar absolutas antes do fetch.
+ * URLs do provider real (R2, presignadas) já vêm absolutas e passam direto. */
+function resolverUrlAbsoluta(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  const porta = Number(process.env.PORT) || 3000;
+  return `http://127.0.0.1:${porta}${url}`;
+}
 
 function extensaoPorMime(mime: string): string {
   const mapa: Record<string, string> = {
@@ -1482,6 +1503,178 @@ async function getDocumentoDownloadUrl(
   return getStorageProvider().criarUrlDownload(doc.storageKey, URL_STORAGE_EXPIRA_SEGUNDOS);
 }
 
+const URL_PACOTE_EXPIRA_SEGUNDOS = 7 * 24 * 60 * 60; // 7 dias — tempo pro jurídico baixar
+
+export interface ResultadoEncerramentoLote {
+  lote: Lote;
+  totalNomes: number;
+  pacoteUrl: string;
+  whatsappEnviadoPara: number;
+}
+
+/** Monta a planilha (nome, CPF/CNPJ, protocolo, status, telefone) de todos os
+ * registros do lote. Igual à revelação individual de CPF (I6), isto expõe o
+ * documento sem máscara — é o próprio pacote que vai pro jurídico protocolar
+ * junto aos birôs, então precisa do dado real; por isso fica registrado como
+ * uma revelação em massa no audit_log (ver chamada em encerrarLote). */
+async function montarPlanilhaLote(
+  registrosDoLote: RegistroRow[],
+  associadosPorId: Map<string, AssociadoRow>,
+): Promise<ExcelJS.Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Nomes');
+  sheet.columns = [
+    { header: 'Protocolo', key: 'protocolo', width: 20 },
+    { header: 'Nome / Razão Social', key: 'nome', width: 32 },
+    { header: 'CPF/CNPJ', key: 'cpfCnpj', width: 20 },
+    { header: 'Telefone', key: 'telefone', width: 18 },
+    { header: 'Status Processual', key: 'status', width: 20 },
+    { header: 'Valor (R$)', key: 'valor', width: 14 },
+  ];
+  sheet.getRow(1).font = { bold: true };
+
+  for (const reg of registrosDoLote) {
+    const associado = associadosPorId.get(reg.associadoId);
+    sheet.addRow({
+      protocolo: reg.protocolCode || '—',
+      nome: reg.nome,
+      cpfCnpj: associado?.cpfCnpjRaw || reg.cpfCnpjRaw,
+      telefone: associado?.telefoneWhatsapp || '—',
+      status: reg.processStatus,
+      valor: (reg.unitPrice / 100).toFixed(2).replace('.', ','),
+    });
+  }
+
+  return workbook.xlsx.writeBuffer();
+}
+
+/** Encerra a captação de uma Ação Coletiva: bloqueia novos envios, gera o
+ * pacote (planilha + documentos anexados dos associados, em um único ZIP) e
+ * avisa a equipe ABDCM no WhatsApp (I1/I9 — só quem não é parceiro aciona;
+ * validado antes, na rota). Ação manual (o admin confirma, não dispara
+ * sozinho no instante em que o prazo vence) — I3: o preview de quantos nomes
+ * entram no pacote é mostrado na tela antes de chamar isto. */
+async function encerrarLote(loteId: string, atorUserId: string): Promise<ResultadoEncerramentoLote> {
+  const [loteRow] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, loteId));
+  if (!loteRow) throw new Error('Ação Coletiva não encontrada.');
+  if (loteRow.status !== 'aberto') {
+    throw new Error('Só é possível encerrar uma Ação Coletiva que está com status "aberto".');
+  }
+
+  const registrosDoLote = await db().select().from(schema.registros).where(eq(schema.registros.loteId, loteId));
+
+  const associadoIds = [...new Set(registrosDoLote.map((r) => r.associadoId))];
+  const associadosDoLote =
+    associadoIds.length > 0
+      ? await db().select().from(schema.associados).where(inArray(schema.associados.id, associadoIds))
+      : [];
+  const associadosPorId = new Map(associadosDoLote.map((a) => [a.id, a]));
+
+  const documentosDoLote =
+    associadoIds.length > 0
+      ? await db().select().from(schema.documentosAssociado).where(inArray(schema.documentosAssociado.associadoId, associadoIds))
+      : [];
+
+  // Monta o ZIP: planilha na raiz + uma pasta por associado com os
+  // documentos que ele efetivamente anexou.
+  const zip = new JSZip();
+  const planilhaBuffer = await montarPlanilhaLote(registrosDoLote, associadosPorId);
+  zip.file('planilha_nomes.xlsx', planilhaBuffer);
+
+  for (const doc of documentosDoLote) {
+    const associado = associadosPorId.get(doc.associadoId);
+    const pastaAssociado = `documentos/${(associado?.nome || doc.associadoId).replace(/[^\w\s-]/g, '').trim() || doc.associadoId}`;
+    try {
+      const url = await getStorageProvider().criarUrlDownload(doc.storageKey, URL_STORAGE_EXPIRA_SEGUNDOS);
+      const resposta = await fetch(resolverUrlAbsoluta(url));
+      if (!resposta.ok) throw new Error(`status ${resposta.status}`);
+      const bytes = await resposta.arrayBuffer();
+      zip.file(`${pastaAssociado}/${doc.tipo}.${extensaoPorMime(doc.mimeType)}`, bytes);
+    } catch (err) {
+      console.error(`[encerrarLote] falha ao baixar documento ${doc.id} (${doc.tipo}) do associado ${doc.associadoId}:`, err);
+      // Segue sem esse documento — o pacote sai incompleto nesse item em vez
+      // de travar o encerramento inteiro por um arquivo com problema.
+    }
+  }
+
+  const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const pacoteKey = `pacotes/${loteId}/pacote-${Date.now()}.zip`;
+  const { uploadUrl, headers } = await getStorageProvider().criarUrlUpload({
+    key: pacoteKey,
+    contentType: 'application/zip',
+    expiraEmSegundos: URL_STORAGE_EXPIRA_SEGUNDOS,
+  });
+  const uploadResp = await fetch(resolverUrlAbsoluta(uploadUrl), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/zip', ...headers },
+    body: zipBuffer,
+  });
+  if (!uploadResp.ok) throw new Error('Falha ao enviar o pacote gerado para o storage.');
+  const pacoteUrl = await getStorageProvider().criarUrlDownload(pacoteKey, URL_PACOTE_EXPIRA_SEGUNDOS);
+
+  const agora = new Date().toISOString();
+  await db().update(schema.lotes).set({ status: 'encerrado' }).where(eq(schema.lotes.id, loteId));
+
+  await db().insert(schema.auditLog).values([
+    {
+      id: novoId('audit'),
+      tenantId: loteRow.tenantId,
+      atorUserId,
+      acao: 'LOTE_ENCERRADO',
+      entidadeTipo: 'lotes',
+      entidadeId: loteId,
+      antes: { status: loteRow.status },
+      depois: { status: 'encerrado', total_nomes: registrosDoLote.length },
+      ip: '127.0.0.1',
+      userAgent: 'ABDCM-Admin-Console',
+      ocorridoEm: agora,
+    },
+    {
+      id: novoId('audit'),
+      tenantId: loteRow.tenantId,
+      atorUserId,
+      acao: 'REVELACAO_EM_MASSA_PACOTE_LOTE',
+      entidadeTipo: 'lotes',
+      entidadeId: loteId,
+      depois: { total_registros: registrosDoLote.length, total_documentos: documentosDoLote.length },
+      ip: '127.0.0.1',
+      userAgent: 'ABDCM-Admin-Console',
+      ocorridoEm: agora,
+    },
+  ]);
+
+  // Aviso por WhatsApp pra equipe ABDCM (números configurados em Automações)
+  // — best-effort: se falhar ou não estiver configurado, o pacote já foi
+  // gerado e continua acessível pela tela, então não derruba o encerramento.
+  let whatsappEnviadoPara = 0;
+  try {
+    const [configLinha] = await db().select().from(schema.automacoesConfig).where(eq(schema.automacoesConfig.chave, 'lote_encerrado'));
+    const numeros = Array.isArray(configLinha?.config?.numeros) ? (configLinha.config.numeros as string[]) : [];
+    if ((configLinha?.ativo ?? true) && numeros.length > 0 && whatsAppProviderConfigurado()) {
+      const mensagem =
+        `Ação Coletiva ${loteRow.nome} encerrada! Foram ${registrosDoLote.length} nome(s) captado(s). ` +
+        `Baixe a documentação completa aqui: ${pacoteUrl} (link válido por 7 dias)`;
+      for (const telefone of numeros) {
+        try {
+          await getWhatsAppProvider().enviarTexto({ telefone, texto: mensagem });
+          whatsappEnviadoPara += 1;
+        } catch (err) {
+          console.error(`[encerrarLote] falha ao enviar WhatsApp de encerramento para ${telefone}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[encerrarLote] falha ao processar aviso de WhatsApp:', err);
+  }
+
+  return {
+    lote: loteDeLinha({ ...loteRow, status: 'encerrado' }),
+    totalNomes: registrosDoLote.length,
+    pacoteUrl,
+    whatsappEnviadoPara,
+  };
+}
+
 export const serverStore = {
   getSession,
   setRole,
@@ -1502,6 +1695,7 @@ export const serverStore = {
   revealDocument,
   updateLote,
   createLote,
+  encerrarLote,
   attachComprovante,
   getContestacoes,
   createContestacao,

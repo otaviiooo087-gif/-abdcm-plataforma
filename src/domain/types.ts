@@ -228,11 +228,14 @@ export interface PixCobranca {
 }
 
 // Tipos de aviso automático de WhatsApp — cada um vira uma linha configurável na aba Automações.
+// "lote_encerrado" é o único que avisa a equipe ABDCM (números configuráveis
+// em config.numeros), não associados — disparado ao encerrar uma Ação Coletiva.
 export type TipoNotificacao =
   | 'proximo_lote'
   | 'follow_up_lista'
   | 'status_processo'
-  | 'pagamento_pendente';
+  | 'pagamento_pendente'
+  | 'lote_encerrado';
 
 // Registro de envio (log + chave de deduplicação do motor de automação).
 export interface NotificacaoEnviada {

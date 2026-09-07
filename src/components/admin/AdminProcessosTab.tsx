@@ -27,6 +27,10 @@ import {
   Save,
   X,
   Plus,
+  EyeOff,
+  AlertTriangle,
+  PackageCheck,
+  ExternalLink,
 } from 'lucide-react';
 
 interface AdminProcessosTabProps {
@@ -81,6 +85,48 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
   const [novaAcaoError, setNovaAcaoError] = useState<string | null>(null);
 
   const protocoloAutoPreview = new Date().toISOString().slice(0, 10);
+
+  // "Ver nomes" dentro do card de cada Ação Coletiva
+  const [expandedLoteId, setExpandedLoteId] = useState<string | null>(null);
+
+  // Encerrar Ação Coletiva: bloqueia captação, gera o pacote (planilha +
+  // documentos, em ZIP) e avisa a equipe ABDCM no WhatsApp
+  const [showEncerrarModal, setShowEncerrarModal] = useState(false);
+  const [isEncerrando, setIsEncerrando] = useState(false);
+  const [encerrarError, setEncerrarError] = useState<string | null>(null);
+  const [encerrarResultado, setEncerrarResultado] = useState<{
+    totalNomes: number;
+    pacoteUrl: string;
+    whatsappEnviadoPara: number;
+  } | null>(null);
+
+  const handleAbrirEncerrarModal = () => {
+    setEncerrarError(null);
+    setEncerrarResultado(null);
+    setShowEncerrarModal(true);
+  };
+
+  const handleFecharEncerrarModal = () => {
+    setShowEncerrarModal(false);
+    setEncerrarError(null);
+    setEncerrarResultado(null);
+  };
+
+  const handleConfirmarEncerramento = async (loteId: string) => {
+    setIsEncerrando(true);
+    setEncerrarError(null);
+    try {
+      const res = await fetch(`/api/lotes/${loteId}/encerrar`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Erro ao encerrar Ação Coletiva.');
+      setEncerrarResultado(data);
+      onRefreshData();
+    } catch (err) {
+      setEncerrarError(err instanceof Error ? err.message : 'Erro ao encerrar Ação Coletiva.');
+    } finally {
+      setIsEncerrando(false);
+    }
+  };
 
   const toggleNovaAcaoBureau = (bureau: string) => {
     setNovaAcaoBureaus((prev) =>
@@ -537,6 +583,37 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Sub-aba: nomes inseridos nesta Ação Coletiva */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedLoteId(expandedLoteId === lote.id ? null : lote.id);
+                  }}
+                  className="mt-2 w-full pt-2 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] font-bold text-[#148296] hover:text-[#0f6b7c] cursor-pointer"
+                >
+                  {expandedLoteId === lote.id ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  {expandedLoteId === lote.id ? 'Ocultar nomes' : `Ver nomes (${loteRegistros.length})`}
+                </button>
+
+                {expandedLoteId === lote.id && (
+                  <div onClick={(e) => e.stopPropagation()} className="mt-2 max-h-40 overflow-y-auto space-y-1 -mx-1 px-1">
+                    {loteRegistros.length === 0 ? (
+                      <p className="text-[11px] text-slate-400 text-center py-2">Nenhum nome nesta ação ainda.</p>
+                    ) : (
+                      loteRegistros.map((r) => (
+                        <div
+                          key={r.id}
+                          className="flex items-center justify-between gap-2 bg-slate-50 rounded-lg px-2 py-1.5 text-[11px]"
+                        >
+                          <span className="truncate font-semibold text-slate-700">{r.nome}</span>
+                          <span className="shrink-0 font-mono text-slate-400">{r.protocol_code || '—'}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -653,6 +730,30 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Prazo vencido: captação continua "aberta" até o admin confirmar o
+              encerramento — I3, ação em massa (bloqueia envios de todos os
+              parceiros pra este lote) sempre com esse passo de confirmação. */}
+          {currentLote.status === 'aberto' && new Date(currentLote.closes_at) < new Date() && (
+            <div className="mt-4 pt-4 border-t border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <p className="text-xs text-amber-200">
+                  <strong className="font-bold">Prazo de encerramento vencido.</strong> A captação
+                  continua aberta até você confirmar. Ao encerrar, o sistema bloqueia novos envios,
+                  gera o pacote (planilha + documentos anexados) e avisa a equipe ABDCM no WhatsApp.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAbrirEncerrarModal}
+                className="shrink-0 px-4 py-2 text-xs font-bold text-slate-900 bg-amber-400 hover:bg-amber-300 rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <PackageCheck className="w-4 h-4" />
+                Encerrar Ação Coletiva Agora
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1210,6 +1311,100 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                 {isCreatingAcao ? 'Criando...' : 'Criar Ação Coletiva'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Encerrar Ação Coletiva */}
+      {showEncerrarModal && currentLote && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl border border-slate-200 max-w-lg w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <PackageCheck className="w-4 h-4 text-[#148296]" />
+                {encerrarResultado ? 'Ação Coletiva Encerrada' : 'Encerrar Ação Coletiva'}
+              </h3>
+              <button
+                type="button"
+                onClick={handleFecharEncerrarModal}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {!encerrarResultado ? (
+              <>
+                <p className="text-xs text-slate-600">
+                  Você está prestes a encerrar <strong className="text-slate-900">{currentLote.nome}</strong>.
+                  Isso vai:
+                </p>
+                <ul className="text-xs text-slate-600 space-y-1.5 list-disc pl-4">
+                  <li>Bloquear novos envios de parceiros para esta Ação Coletiva;</li>
+                  <li>
+                    Gerar um pacote (planilha + documentos anexados) com os{' '}
+                    <strong>{registros.filter((r) => r.lote_id === currentLote.id).length} nome(s)</strong> desta
+                    ação;
+                  </li>
+                  <li>Avisar a equipe ABDCM no WhatsApp, com o link do pacote.</li>
+                </ul>
+
+                {encerrarError && (
+                  <div className="flex items-center gap-2 text-left bg-rose-50 text-rose-700 p-3 rounded-xl border border-rose-200 text-xs">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span>{encerrarError}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleFecharEncerrarModal}
+                    className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isEncerrando}
+                    onClick={() => handleConfirmarEncerramento(currentLote.id)}
+                    className="px-4 py-1.5 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {isEncerrando ? 'Encerrando...' : 'Confirmar Encerramento'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 text-left bg-emerald-50 text-emerald-700 p-3 rounded-xl border border-emerald-200 text-xs">
+                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-600" />
+                  <span>
+                    <strong>{encerrarResultado.totalNomes} nome(s)</strong> incluídos no pacote.{' '}
+                    {encerrarResultado.whatsappEnviadoPara > 0
+                      ? `Aviso enviado para ${encerrarResultado.whatsappEnviadoPara} número(s) no WhatsApp.`
+                      : 'Nenhum número de WhatsApp configurado para receber o aviso (configure em Automações).'}
+                  </span>
+                </div>
+                <a
+                  href={encerrarResultado.pacoteUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full px-4 py-2.5 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Baixar Pacote (ZIP)
+                </a>
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={handleFecharEncerrarModal}
+                    className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
