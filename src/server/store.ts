@@ -1229,7 +1229,10 @@ async function getNotificacoesLog(limite = 50): Promise<NotificacaoEnviada[]> {
 // já mandou o arquivo. Ver src/integrations/storage.
 // ---------------------------------------------------------------------
 
-const TIPOS_DOCUMENTO = ['cnh', 'rg'] as const;
+// cnh/rg são de pessoa física; comprovante_inscricao (cartão CNPJ) e
+// ficha_associativa valem pros dois — CNPJ não tem CNH/RG, tem seu próprio
+// comprovante de inscrição no lugar.
+const TIPOS_DOCUMENTO = ['cnh', 'rg', 'comprovante_inscricao', 'ficha_associativa'] as const;
 type TipoDocumento = (typeof TIPOS_DOCUMENTO)[number];
 const URL_STORAGE_EXPIRA_SEGUNDOS = 15 * 60;
 
@@ -1356,19 +1359,24 @@ async function confirmarDocumentoUpload(data: {
     });
 }
 
-async function getDocumentosStatus(parceiroId?: string): Promise<Record<string, { cnh: boolean; rg: boolean }>> {
+type StatusDocumentosAssociado = Record<TipoDocumento, boolean>;
+
+async function getDocumentosStatus(parceiroId?: string): Promise<Record<string, StatusDocumentosAssociado>> {
   const associados = parceiroId
     ? await db().select({ id: schema.associados.id }).from(schema.associados).where(eq(schema.associados.parceiroId, parceiroId))
     : await db().select({ id: schema.associados.id }).from(schema.associados);
   const idsValidos = new Set(associados.map((a) => a.id));
 
   const docs = await db().select().from(schema.documentosAssociado);
-  const status: Record<string, { cnh: boolean; rg: boolean }> = {};
+  const status: Record<string, StatusDocumentosAssociado> = {};
   for (const d of docs) {
     if (!idsValidos.has(d.associadoId)) continue;
-    if (!status[d.associadoId]) status[d.associadoId] = { cnh: false, rg: false };
-    if (d.tipo === 'cnh') status[d.associadoId].cnh = true;
-    if (d.tipo === 'rg') status[d.associadoId].rg = true;
+    if (!status[d.associadoId]) {
+      status[d.associadoId] = { cnh: false, rg: false, comprovante_inscricao: false, ficha_associativa: false };
+    }
+    if (TIPOS_DOCUMENTO.includes(d.tipo as TipoDocumento)) {
+      status[d.associadoId][d.tipo as TipoDocumento] = true;
+    }
   }
   return status;
 }

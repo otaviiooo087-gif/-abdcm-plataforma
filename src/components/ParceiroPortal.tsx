@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Lote, Registro, Associado, Contestacao, Servico, Contrato } from '../domain/types.js';
+import { StatusDocumentos, documentosEsperados } from '../lib/documentos/index.js';
 import { formatCurrencyBRL } from '../lib/money/index.js';
 import {
   UserPlus,
@@ -49,6 +50,7 @@ interface SubmissaoData {
   tem_comprovante?: boolean;
 }
 
+
 interface ParceiroPortalProps {
   lotes: Lote[];
   registros: Registro[];
@@ -89,7 +91,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   const [showImportarModal, setShowImportarModal] = useState(false);
   const [showEnviarModal, setShowEnviarModal] = useState(false);
   const [showDocumentosModal, setShowDocumentosModal] = useState(false);
-  const [documentosStatus, setDocumentosStatus] = useState<Record<string, { cnh: boolean; rg: boolean }>>({});
+  const [documentosStatus, setDocumentosStatus] = useState<Record<string, StatusDocumentos>>({});
 
   const loadDocumentosStatus = () => {
     fetch('/api/documentos/status')
@@ -376,7 +378,14 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   }
 
   if (parceiroTab === 'minhas-listas') {
-    return <MinhasListasView registros={registros} lotes={lotes} submissoes={submissoes} />;
+    return (
+      <MinhasListasView
+        registros={registros}
+        lotes={lotes}
+        submissoes={submissoes}
+        documentosStatus={documentosStatus}
+      />
+    );
   }
 
   if (parceiroTab === 'financeiro') {
@@ -1145,17 +1154,23 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
                       <td className="px-4 py-3 whitespace-nowrap">
                         {(() => {
                           const status = documentosStatus[reg.associado_id];
-                          const completo = status?.cnh && status?.rg;
+                          // Ficha associativa fica de fora do indicador rápido — ainda não
+                          // tem geração automática, então cobraria um documento que a
+                          // maioria não tem como anexar ainda.
+                          const esperados = documentosEsperados(reg.tipo_documento).filter((d) => d.tipo !== 'ficha_associativa');
+                          const completo = esperados.every((d) => status?.[d.tipo]);
                           return (
                             <span
-                              title={completo ? 'CNH e RG anexados' : 'Falta CNH e/ou RG'}
+                              title={esperados.map((d) => `${d.label}: ${status?.[d.tipo] ? 'ok' : 'falta'}`).join(' · ')}
                               className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${
                                 completo
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                   : 'bg-slate-100 text-slate-400 border-slate-200'
                               }`}
                             >
-                              {status?.cnh ? 'CNH' : '—'} / {status?.rg ? 'RG' : '—'}
+                              {esperados
+                                .map((d) => (status?.[d.tipo] ? d.tipo.slice(0, 3).toUpperCase() : '—'))
+                                .join(' / ')}
                             </span>
                           );
                         })()}
