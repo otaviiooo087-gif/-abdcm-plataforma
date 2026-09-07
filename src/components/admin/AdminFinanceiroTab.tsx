@@ -170,7 +170,7 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
       return [
         sub.id,
         sub.parceiro_id === 'parc-001' ? 'Rdz Consultoria Financeira' : sub.parceiro_id,
-        lote?.titulo || sub.lote_id,
+        lote?.nome || sub.lote_id,
         sub.nomes_count,
         sub.valor_total,
         formatCurrencyBRL(sub.valor_total),
@@ -430,7 +430,7 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
                               Parceiro: Rdz Consultoria Financeira
                             </p>
                             <p className="text-[11px] text-slate-500">
-                              Lote: {lote?.titulo || sub.lote_id} • {sub.nomes_count} associados
+                              Lote: {lote?.nome || sub.lote_id} • {sub.nomes_count} associados
                             </p>
                           </div>
 

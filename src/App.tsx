@@ -17,7 +17,7 @@ import { UserSession } from './server/mockData.js';
 export default function App() {
   const [currentSurface, setCurrentSurface] = useState<'parceiro' | 'admin' | 'publico'>('parceiro');
   const [parceiroTab, setParceiroTab] = useState<string>('home');
-  const [adminTab, setAdminTab] = useState<'processos' | 'financeiro' | 'operacao' | 'controle'>('processos');
+  const [adminTab, setAdminTab] = useState<'processos' | 'financeiro' | 'operacao' | 'controle' | 'config'>('processos');
   const [session, setSession] = useState<UserSession | null>(null);
   const [lotes, setLotes] = useState<Lote[]>([]);
   const [registros, setRegistros] = useState<Registro[]>([]);

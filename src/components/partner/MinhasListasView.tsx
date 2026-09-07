@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Registro, Lote } from '../../domain/types.js';
-import { Download, Search, Filter, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Download, Search, Calendar } from 'lucide-react';
 
 interface MinhasListasViewProps {
   registros: Registro[];
@@ -207,87 +207,59 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
         </div>
       </div>
 
-      {/* Table Container */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden flex flex-col">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead className="bg-slate-50 text-[10px] text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
-              <tr>
-                <th className="px-4 py-3">Lista</th>
-                <th className="px-4 py-3">Número Ação Coletiva</th>
-                <th className="px-4 py-3">Observação</th>
-                <th className="px-4 py-3">Nome ⇅</th>
-                <th className="px-4 py-3">CPF/CNPJ</th>
-                <th className="px-4 py-3">Tipo</th>
-                <th className="px-4 py-3">Status ⇅</th>
-                <th className="px-3 py-3 text-center">Serasa</th>
-                <th className="px-3 py-3 text-center">Boa Vista</th>
-                <th className="px-3 py-3 text-center">SPC</th>
-                <th className="px-3 py-3 text-center">Cenprot BR</th>
-                <th className="px-3 py-3 text-center">Cenprot SP</th>
-                <th className="px-4 py-3">Data ⇅</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">
-              {filtered.map((reg) => {
-                const lote = lotes.find((l) => l.id === reg.lote_id);
-                const bureauState = reg.process_status === 'baixado' ? 'baixado' : 'pendente';
-                const formattedDate = new Date(reg.created_at).toLocaleDateString('pt-BR');
+      {/* Contador */}
+      <p className="text-xs text-slate-500">{filtered.length} nome(s) encontrado(s)</p>
 
-                return (
-                  <tr key={reg.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="px-4 py-3 font-semibold text-slate-900 whitespace-nowrap">
-                      {lote?.nome || 'AÇÃO COLETIVA 124'}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-slate-600 whitespace-nowrap">
-                      {lote?.referencia_protocolo || '2026.888.10124'}
-                    </td>
-                    <td className="px-4 py-3 text-slate-400">—</td>
-                    <td className="px-4 py-3 font-medium text-slate-900 whitespace-nowrap">
-                      {reg.nome}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-slate-600 whitespace-nowrap">
-                      {reg.cpf_cnpj}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600">
-                        {reg.tipo_documento.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">{getStatusPill(reg.process_status)}</td>
-                    <td className="px-3 py-3 text-center">{getBureauPill(bureauState)}</td>
-                    <td className="px-3 py-3 text-center">{getBureauPill(bureauState)}</td>
-                    <td className="px-3 py-3 text-center">{getBureauPill(bureauState)}</td>
-                    <td className="px-3 py-3 text-center">{getBureauPill(bureauState)}</td>
-                    <td className="px-3 py-3 text-center">{getBureauPill(bureauState)}</td>
-                    <td className="px-4 py-3 text-slate-500 whitespace-nowrap font-mono">{formattedDate}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* Cards individuais */}
+      {filtered.length === 0 ? (
+        <div className="bg-white p-10 rounded-xl border border-slate-200 shadow-2xs text-center text-xs text-slate-400">
+          Nenhum registro encontrado para os filtros aplicados.
         </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {filtered.map((reg) => {
+            const lote = lotes.find((l) => l.id === reg.lote_id);
+            const bureauState = reg.process_status === 'baixado' ? 'baixado' : 'pendente';
+            const formattedDate = new Date(reg.created_at).toLocaleDateString('pt-BR');
 
-        {/* Footer Pagination */}
-        <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
-          <span>{filtered.length} nome(s) encontrado(s)</span>
-          <div className="flex items-center gap-2 font-medium">
-            <button
-              disabled
-              className="p-1 rounded text-slate-300 cursor-not-allowed"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span>Página 1 de 1</span>
-            <button
-              disabled
-              className="p-1 rounded text-slate-300 cursor-not-allowed"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
+            return (
+              <div
+                key={reg.id}
+                className="bg-white rounded-xl border border-slate-200 shadow-2xs p-4 flex flex-col gap-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h4 className="text-sm font-bold text-slate-900 truncate">{reg.nome}</h4>
+                    <p className="text-xs font-mono text-slate-500 mt-0.5">{reg.cpf_cnpj}</p>
+                  </div>
+                  {getStatusPill(reg.process_status)}
+                </div>
+
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-500 min-w-0">
+                  <Calendar className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{lote?.nome || 'AÇÃO COLETIVA 124'}</span>
+                </div>
+
+                <div className="pt-2.5 border-t border-slate-100 grid grid-cols-5 gap-1 text-center">
+                  {['Serasa', 'Boa Vista', 'SPC', 'Cenprot BR', 'Cenprot SP'].map((label) => (
+                    <div key={label} className="flex flex-col items-center gap-1">
+                      {getBureauPill(bureauState)}
+                      <span className="text-[8px] text-slate-400 leading-tight">{label}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-1 flex items-center justify-between">
+                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600">
+                    {reg.tipo_documento.toUpperCase()}
+                  </span>
+                  <span className="text-[11px] text-slate-400 font-mono">{formattedDate}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
-      </div>
+      )}
     </div>
   );
 };

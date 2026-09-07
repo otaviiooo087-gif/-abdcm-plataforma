@@ -23,6 +23,9 @@ import {
   Gavel,
   ShieldCheck,
   RefreshCw,
+  Pencil,
+  Save,
+  X,
 } from 'lucide-react';
 
 interface AdminProcessosTabProps {
@@ -58,11 +61,49 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
   const [showAndamentoModal, setShowAndamentoModal] = useState(false);
   const [andamentoTexto, setAndamentoTexto] = useState('');
+  const [isEditingPrazo, setIsEditingPrazo] = useState(false);
+  const [prazoInput, setPrazoInput] = useState('');
+  const [isSavingPrazo, setIsSavingPrazo] = useState(false);
+  const [prazoError, setPrazoError] = useState<string | null>(null);
 
   const handleCopyProcesso = (num: string) => {
     navigator.clipboard.writeText(num);
     setCopiedProcesso(num);
     setTimeout(() => setCopiedProcesso(null), 2500);
+  };
+
+  const toDatetimeLocalValue = (iso: string) => {
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const handleStartEditPrazo = (loteId: string, closesAt: string) => {
+    setPrazoInput(toDatetimeLocalValue(closesAt));
+    setPrazoError(null);
+    setIsEditingPrazo(true);
+    void loteId;
+  };
+
+  const handleSavePrazo = async (loteId: string) => {
+    if (!prazoInput) return;
+    setIsSavingPrazo(true);
+    setPrazoError(null);
+    try {
+      const res = await fetch(`/api/lotes/${loteId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ closesAt: new Date(prazoInput).toISOString() }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || 'Erro ao atualizar prazo');
+      setIsEditingPrazo(false);
+      onRefreshData();
+    } catch (err) {
+      setPrazoError(err instanceof Error ? err.message : 'Erro ao atualizar prazo');
+    } finally {
+      setIsSavingPrazo(false);
+    }
   };
 
   // Lote atualmente selecionado (se não for 'todos')
@@ -337,7 +378,7 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                     )}
                   </div>
 
-                  <h4 className="text-sm font-bold text-slate-900">{lote.titulo}</h4>
+                  <h4 className="text-sm font-bold text-slate-900">{lote.nome}</h4>
 
                   {/* Número do Processo Judicial */}
                   <div className="mt-2 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs">
@@ -425,14 +466,71 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                 </span>
                 <span className="text-xs text-slate-400">• Código: {currentLote.codigo}</span>
               </div>
-              <h3 className="text-lg font-bold text-white mt-1">{currentLote.titulo}</h3>
+              <h3 className="text-lg font-bold text-white mt-1">{currentLote.nome}</h3>
               <p className="text-xs text-slate-300 mt-1 max-w-2xl">
-                {currentLote.descricao ||
-                  'Ação Coletiva movida pela ABDCM visando o cancelamento e baixa de apontamentos cadastrais indevidos.'}
+                Ação Coletiva movida pela ABDCM visando o cancelamento e baixa de apontamentos
+                cadastrais indevidos.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 shrink-0">
+              <div className="bg-slate-800/80 border border-slate-700 px-3.5 py-2 rounded-lg text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] text-slate-400 uppercase font-bold">
+                    Prazo de Encerramento
+                  </p>
+                  {!isEditingPrazo && (
+                    <button
+                      type="button"
+                      onClick={() => handleStartEditPrazo(currentLote.id, currentLote.closes_at)}
+                      className="text-slate-300 hover:text-white cursor-pointer"
+                      title="Editar prazo"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+                {isEditingPrazo ? (
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      type="datetime-local"
+                      value={prazoInput}
+                      onChange={(e) => setPrazoInput(e.target.value)}
+                      className="bg-slate-900 border border-slate-600 rounded px-1.5 py-1 text-[11px] text-white"
+                    />
+                    <button
+                      type="button"
+                      disabled={isSavingPrazo}
+                      onClick={() => handleSavePrazo(currentLote.id)}
+                      className="text-emerald-400 hover:text-emerald-300 cursor-pointer disabled:opacity-50"
+                      title="Salvar"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingPrazo(false)}
+                      className="text-slate-400 hover:text-white cursor-pointer"
+                      title="Cancelar"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <p className="font-semibold text-white mt-0.5">
+                    {new Date(currentLote.closes_at).toLocaleDateString('pt-BR')} às{' '}
+                    {new Date(currentLote.closes_at).toLocaleTimeString('pt-BR', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                    h
+                  </p>
+                )}
+                {prazoError && (
+                  <p className="text-[10px] text-rose-400 mt-1">{prazoError}</p>
+                )}
+              </div>
+
               <div className="bg-slate-800/80 border border-slate-700 px-3.5 py-2 rounded-lg text-xs">
                 <p className="text-[10px] text-slate-400 uppercase font-bold">Processo Judicial</p>
                 <div className="flex items-center gap-2 mt-0.5">

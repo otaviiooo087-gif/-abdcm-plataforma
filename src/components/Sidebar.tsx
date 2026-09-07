@@ -5,33 +5,25 @@ import {
   ShieldCheck,
   Search,
   Layers,
-  FileCheck2,
   Receipt,
-  Users,
   Building2,
   Lock,
   ShoppingBag,
   Calendar,
-  RotateCw,
-  BookOpen,
   ListOrdered,
   DollarSign,
   AlertTriangle,
-  Calculator,
   FileSignature,
-  FileText,
-  GraduationCap,
-  Activity,
-  ClipboardList,
   Check,
   ChevronRight,
+  Settings,
 } from 'lucide-react';
 
 interface SidebarProps {
   currentSurface: 'parceiro' | 'admin' | 'publico';
   onSelectSurface: (surface: 'parceiro' | 'admin' | 'publico') => void;
-  adminTab: 'processos' | 'financeiro' | 'operacao' | 'registros' | 'controle';
-  onSelectAdminTab: (tab: 'processos' | 'financeiro' | 'operacao' | 'controle') => void;
+  adminTab: 'processos' | 'financeiro' | 'operacao' | 'registros' | 'controle' | 'config';
+  onSelectAdminTab: (tab: 'processos' | 'financeiro' | 'operacao' | 'controle' | 'config') => void;
   parceiroTab?: string;
   onSelectParceiroTab?: (tab: string) => void;
   session: UserSession | null;
@@ -139,30 +131,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
 
               <button
-                onClick={() => onSelectParceiroTab?.('reprotocolo')}
-                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  parceiroTab === 'reprotocolo'
-                    ? 'bg-[#0c4f5d] font-bold text-white'
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <RotateCw className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Reprotocolo</span>
-              </button>
-
-              <button
-                onClick={() => onSelectParceiroTab?.('manual')}
-                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  parceiroTab === 'manual'
-                    ? 'bg-[#0c4f5d] font-bold text-white'
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <BookOpen className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Manual do Parceiro</span>
-              </button>
-
-              <button
                 onClick={() => onSelectParceiroTab?.('minhas-listas')}
                 className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
                   parceiroTab === 'minhas-listas'
@@ -199,18 +167,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
 
               <button
-                onClick={() => onSelectParceiroTab?.('orcamento')}
-                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  parceiroTab === 'orcamento'
-                    ? 'bg-[#0c4f5d] font-bold text-white'
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <Calculator className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Orçamento</span>
-              </button>
-
-              <button
                 onClick={() => onSelectParceiroTab?.('contrato')}
                 className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
                   parceiroTab === 'contrato'
@@ -224,87 +180,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
 
-          {/* Área do Revendedor */}
-          <div className="border-t border-white/10 pt-3">
-            <p className="text-[10px] font-bold text-white/60 uppercase tracking-wider px-3 mb-1.5">
-              ÁREA DO REVENDEDOR
-            </p>
-            <div className="space-y-0.5">
-              <button
-                onClick={() => onSelectParceiroTab?.('documentos')}
-                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  parceiroTab === 'documentos'
-                    ? 'bg-[#0c4f5d] font-bold text-white'
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <FileText className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Documentos de Apoio</span>
-              </button>
-
-              <button
-                onClick={() => onSelectParceiroTab?.('academia')}
-                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  parceiroTab === 'academia'
-                    ? 'bg-[#0c4f5d] font-bold text-white'
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <GraduationCap className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Academia Limpa Nome</span>
-              </button>
-            </div>
-          </div>
-
-          {/* CNPJ Inapto */}
-          <div className="border-t border-white/10 pt-3">
-            <p className="text-[10px] font-bold text-white/60 uppercase tracking-wider px-3 mb-1.5">
-              CNPJ INAPTO
-            </p>
-            <button
-              onClick={() => onSelectParceiroTab?.('cnpj-inapto')}
-              className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                parceiroTab === 'cnpj-inapto'
-                  ? 'bg-[#0c4f5d] font-bold text-white'
-                  : 'text-white/80 hover:bg-white/10 hover:text-white'
-              }`}
-            >
-              <Building2 className="w-4 h-4 opacity-90 shrink-0" />
-              <span>CNPJ Inapto</span>
-            </button>
-          </div>
-
-          {/* Diagnóstico de Crédito */}
-          <div className="border-t border-white/10 pt-3">
-            <p className="text-[10px] font-bold text-white/60 uppercase tracking-wider px-3 mb-1.5">
-              DIAGNÓSTICO DE CRÉDITO
-            </p>
-            <div className="space-y-0.5">
-              <button
-                onClick={() => onSelectParceiroTab?.('solicitar-diagnostico')}
-                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  parceiroTab === 'solicitar-diagnostico'
-                    ? 'bg-[#0c4f5d] font-bold text-white'
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <Activity className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Solicitar Diagnóstico</span>
-              </button>
-
-              <button
-                onClick={() => onSelectParceiroTab?.('meus-diagnosticos')}
-                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
-                  parceiroTab === 'meus-diagnosticos'
-                    ? 'bg-[#0c4f5d] font-bold text-white'
-                    : 'text-white/80 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <ClipboardList className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Meus Diagnósticos</span>
-              </button>
-            </div>
-          </div>
         </nav>
       ) : (
         /* Menus do Admin e Consulta Pública */
@@ -360,6 +235,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <Lock className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
                 <span>Controle & Auditoria</span>
+              </button>
+
+              <button
+                onClick={() => onSelectAdminTab('config')}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
+                  adminTab === 'config'
+                    ? 'bg-[#0c4f5d] font-bold text-white shadow-2xs'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Settings className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
+                <span>Configurações</span>
               </button>
             </div>
           )}

@@ -43,43 +43,34 @@ export const HomeView: React.FC<HomeViewProps> = ({
     else setGreeting('Boa noite');
   }, []);
 
-  // Contagem regressiva ativa para o prazo de encerramento do lote (19:00)
-  const [timeLeft, setTimeLeft] = useState({
-    dias: '00',
-    horas: '05',
-    minutos: '06',
-    segundos: '22',
-  });
+  // Contagem regressiva pro prazo de encerramento real do lote vigente —
+  // closes_at é configurado pelo admin em Processos (Ações Coletivas).
+  const [timeLeft, setTimeLeft] = useState({ dias: '00', horas: '00', minutos: '00', segundos: '00' });
+  const prazoConfigurado = Boolean(loteVigente?.closes_at);
 
   useEffect(() => {
+    if (!loteVigente?.closes_at) return;
+    const target = new Date(loteVigente.closes_at);
+
     const calculateTime = () => {
-      const now = new Date();
-      // Target: hoje às 19:00 ou próxima data de fechamento
-      const target = new Date();
-      target.setHours(19, 0, 0, 0);
-
-      // Se já passou das 19:00 de hoje, aponta para amanhã às 19:00
-      if (now.getTime() >= target.getTime()) {
-        target.setDate(target.getDate() + 1);
-      }
-
-      const diff = Math.max(0, target.getTime() - now.getTime());
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      const diff = Math.max(0, target.getTime() - Date.now());
+      const dias = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const horas = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutos = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const segundos = Math.floor((diff % (1000 * 60)) / 1000);
 
       setTimeLeft({
-        dias: '00',
-        horas: String(hours).padStart(2, '0'),
-        minutos: String(minutes).padStart(2, '0'),
-        segundos: String(seconds).padStart(2, '0'),
+        dias: String(dias).padStart(2, '0'),
+        horas: String(horas).padStart(2, '0'),
+        minutos: String(minutos).padStart(2, '0'),
+        segundos: String(segundos).padStart(2, '0'),
       });
     };
 
     calculateTime();
     const interval = setInterval(calculateTime, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loteVigente?.closes_at]);
 
   const totalNomes = registros.length || 19;
   const partnerName = session?.nome || 'Rdz Consultoria Financeira';
@@ -340,7 +331,9 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </div>
 
           <div className="mt-5 pt-4 border-t border-slate-100 text-xs text-slate-500">
-            Encerra dia 04/09 às 19:00h
+            {prazoConfigurado
+              ? `Encerra em ${new Date(loteVigente!.closes_at).toLocaleDateString('pt-BR')} às ${new Date(loteVigente!.closes_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}h`
+              : 'Prazo de encerramento ainda não configurado pela ABDCM.'}
           </div>
         </div>
 
