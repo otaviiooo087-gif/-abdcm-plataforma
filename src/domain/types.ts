@@ -150,6 +150,7 @@ export interface Submissao {
   revisado_por_user_id?: string | null;
   reason_code?: string | null;
   motivo_observacao?: string | null;
+  tem_comprovante?: boolean;
 }
 
 // Auditoria imutável
@@ -165,4 +166,45 @@ export interface AuditLog {
   ip: string;
   user_agent: string;
   ocorrido_em: string;
+}
+
+export type StatusContestacao = 'aberta' | 'respondida' | 'resolvida' | 'rejeitada';
+
+// Contestação ("Reclame Aqui"): canal de reabertura pós-conclusão do lote.
+// Abertura bloqueada até 72h da conclusão (I5-adjacente); SLA de resposta 48h.
+export interface Contestacao {
+  id: string;
+  tenant_id: string;
+  parceiro_id: string;
+  lote_id: string;
+  registro_id?: string | null;
+  motivo: string;
+  observacao?: string | null;
+  status: StatusContestacao;
+  aberta_em: string;
+  sla_vence_em: string;
+  resolvido_em?: string | null;
+}
+
+// Serviço do catálogo — configurado pelo admin, exibido ao parceiro.
+export interface Servico {
+  id: string;
+  tenant_id: string;
+  nome: string;
+  descricao?: string | null;
+  preco: number; // centavos
+  prazo_dias: number;
+  usa_listas: boolean; // funciona como a Ação Coletiva (com envio de listas) ou não
+  ativo: boolean;
+  created_at: string;
+}
+
+// Contrato-modelo que o admin disponibiliza aos associados/parceiros.
+export interface Contrato {
+  id: string;
+  tenant_id: string;
+  nome_arquivo: string;
+  mime_type: string;
+  conteudo_base64: string;
+  atualizado_em: string;
 }

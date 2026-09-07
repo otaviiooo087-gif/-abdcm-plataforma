@@ -90,6 +90,8 @@ export const submissoes = pgTable('submissoes', {
   revisadoPorUserId: text('revisado_por_user_id'),
   reasonCode: text('reason_code'),
   motivoObservacao: text('motivo_observacao'),
+  comprovanteBase64: text('comprovante_base64'),
+  comprovanteMime: text('comprovante_mime'),
 })
 
 export const processEvents = pgTable('process_events', {
@@ -117,4 +119,39 @@ export const auditLog = pgTable('audit_log', {
   ip: text('ip'),
   userAgent: text('user_agent'),
   ocorridoEm: timestamp('ocorrido_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const contestacoes = pgTable('contestacoes', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  parceiroId: text('parceiro_id').notNull(),
+  loteId: text('lote_id').notNull(),
+  registroId: text('registro_id'),
+  motivo: text('motivo').notNull(),
+  observacao: text('observacao'),
+  status: text('status').notNull(),
+  abertaEm: timestamp('aberta_em', { withTimezone: true, mode: 'string' }).notNull(),
+  slaVenceEm: timestamp('sla_vence_em', { withTimezone: true, mode: 'string' }).notNull(),
+  resolvidoEm: timestamp('resolvido_em', { withTimezone: true, mode: 'string' }),
+})
+
+export const servicos = pgTable('servicos', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  nome: text('nome').notNull(),
+  descricao: text('descricao'),
+  preco: integer('preco').notNull(),
+  prazoDias: integer('prazo_dias').notNull(),
+  usaListas: boolean('usa_listas').notNull().default(false),
+  ativo: boolean('ativo').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const contratos = pgTable('contratos', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  nomeArquivo: text('nome_arquivo').notNull(),
+  mimeType: text('mime_type').notNull(),
+  conteudoBase64: text('conteudo_base64').notNull(),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })

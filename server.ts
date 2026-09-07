@@ -13,7 +13,9 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json());
+  // Limite elevado por causa do upload do contrato-modelo em base64 (padrão do
+  // Express é 100kb, pequeno demais até pra um PDF simples de poucas páginas).
+  app.use(express.json({ limit: '15mb' }));
 
   // ==========================================
   // API ROUTES (Validação estrita no servidor)
@@ -38,6 +40,24 @@ async function startServer() {
   // 2. Lotes
   app.get('/api/lotes', async (_req: Request, res: Response) => {
     res.json(await serverStore.getLotes());
+  });
+
+  // 2.1 Atualizar configuração do lote (ex.: prazo de encerramento) — admin
+  app.patch('/api/lotes/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM configura as Ações Coletivas.' });
+        return;
+      }
+      const { id } = req.params;
+      const { closesAt, nome } = req.body;
+      const lote = await serverStore.updateLote(id, session.id, { closesAt, nome });
+      res.json(lote);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar lote';
+      res.status(400).json({ error: msg });
+    }
   });
 
   // 3. Associados
@@ -170,6 +190,25 @@ async function startServer() {
     }
   });
 
+  // 4.6.3 Anexar Novo Comprovante (submissão reprovada)
+  app.post('/api/submissoes/:id/comprovante', async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { comprovanteBase64, mimeType } = req.body;
+      const session = serverStore.getSession();
+      const submissao = await serverStore.attachComprovante(
+        id,
+        session.id,
+        comprovanteBase64,
+        mimeType || 'application/octet-stream',
+      );
+      res.json({ success: true, submissao });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao anexar comprovante';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 4.7 Cancelar Submissão Pendente
   app.delete('/api/submissoes/:id', async (req: Request, res: Response) => {
     try {
@@ -229,6 +268,110 @@ async function startServer() {
       res.json({ cpf_cnpj_raw: raw });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao revelar documento';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.1 Contestações ("Reclame Aqui")
+  app.get('/api/contestacoes', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    const todas = await serverStore.getContestacoes();
+    if (session.role === 'parceiro') {
+      res.json(todas.filter((c) => c.parceiro_id === session.parceiro_id));
+      return;
+    }
+    res.json(todas);
+  });
+
+  app.post('/api/contestacoes', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      const { loteId, registroId, motivo, observacao } = req.body;
+      const nova = await serverStore.createContestacao({
+        loteId,
+        registroId,
+        motivo,
+        observacao,
+        parceiroId: session.parceiro_id ?? 'parc-001',
+      });
+      res.status(201).json(nova);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao abrir contestação';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.2 Catálogo de Serviços
+  app.get('/api/servicos', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getServicos());
+  });
+
+  app.post('/api/servicos', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM cadastra serviços.' });
+        return;
+      }
+      const { nome, descricao, preco, prazoDias, usaListas } = req.body;
+      const novo = await serverStore.createServico({ nome, descricao, preco, prazoDias, usaListas });
+      res.status(201).json(novo);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao cadastrar serviço';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.patch('/api/servicos/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM edita serviços.' });
+        return;
+      }
+      const { id } = req.params;
+      const atualizado = await serverStore.updateServico(id, req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar serviço';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/servicos/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM remove serviços.' });
+        return;
+      }
+      const { reasonCode, observacao } = req.body;
+      await serverStore.deleteServico(req.params.id, session.id, reasonCode, observacao);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao remover serviço';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.3 Contrato-modelo (admin anexa; parceiro só lê)
+  app.get('/api/contrato', async (_req: Request, res: Response) => {
+    const contrato = await serverStore.getContrato();
+    res.json(contrato);
+  });
+
+  app.post('/api/contrato', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM anexa o contrato.' });
+        return;
+      }
+      const { nomeArquivo, mimeType, conteudoBase64 } = req.body;
+      const contrato = await serverStore.setContrato({ nomeArquivo, mimeType, conteudoBase64 });
+      res.status(201).json(contrato);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao anexar contrato';
       res.status(400).json({ error: msg });
     }
   });

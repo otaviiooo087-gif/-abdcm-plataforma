@@ -5,6 +5,7 @@ import { formatCurrencyBRL } from '../lib/money/index.js';
 import { UserSession } from '../server/mockData.js';
 import { AdminProcessosTab } from './admin/AdminProcessosTab.js';
 import { AdminFinanceiroTab } from './admin/AdminFinanceiroTab.js';
+import { AdminConfiguracoesTab } from './admin/AdminConfiguracoesTab.js';
 import {
   ShieldAlert,
   Eye,
@@ -31,8 +32,8 @@ import {
 } from 'lucide-react';
 
 interface AdminConsoleProps {
-  activeTab: 'processos' | 'financeiro' | 'operacao' | 'registros' | 'controle';
-  onSelectTab?: (tab: 'processos' | 'financeiro' | 'operacao' | 'controle') => void;
+  activeTab: 'processos' | 'financeiro' | 'operacao' | 'registros' | 'controle' | 'config';
+  onSelectTab?: (tab: 'processos' | 'financeiro' | 'operacao' | 'controle' | 'config') => void;
   lotes: Lote[];
   registros: Registro[];
   submissoes?: Submissao[];
@@ -815,6 +816,11 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           </div>
         </div>
       )}
+
+      {/* ==================================================== */}
+      {/* ABA: CONFIGURAÇÕES (SERVIÇOS & CONTRATO)             */}
+      {/* ==================================================== */}
+      {activeTab === 'config' && <AdminConfiguracoesTab />}
 
       {/* ==================================================== */}
       {/* MODAL: NOVO LOTE / AÇÃO COLETIVA                     */}

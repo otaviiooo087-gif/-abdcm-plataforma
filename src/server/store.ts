@@ -22,6 +22,9 @@ import type {
   AuditLog,
   ProcessStatus,
   UserRole,
+  Contestacao,
+  Servico,
+  Contrato,
 } from '../domain/types.js';
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
 
@@ -39,6 +42,9 @@ type RegistroRow = typeof schema.registros.$inferSelect;
 type SubmissaoRow = typeof schema.submissoes.$inferSelect;
 type ProcessEventRow = typeof schema.processEvents.$inferSelect;
 type AuditLogRow = typeof schema.auditLog.$inferSelect;
+type ContestacaoRow = typeof schema.contestacoes.$inferSelect;
+type ServicoRow = typeof schema.servicos.$inferSelect;
+type ContratoRow = typeof schema.contratos.$inferSelect;
 
 function loteDeLinha(l: LoteRow): Lote {
   return {
@@ -128,6 +134,7 @@ function submissaoDeLinha(s: SubmissaoRow): Submissao {
     revisado_por_user_id: s.revisadoPorUserId,
     reason_code: s.reasonCode,
     motivo_observacao: s.motivoObservacao,
+    tem_comprovante: Boolean(s.comprovanteBase64),
   };
 }
 
@@ -159,6 +166,47 @@ function auditoriaDeLinha(a: AuditLogRow): AuditLog {
     ip: a.ip ?? '',
     user_agent: a.userAgent ?? '',
     ocorrido_em: a.ocorridoEm,
+  };
+}
+
+function contestacaoDeLinha(c: ContestacaoRow): Contestacao {
+  return {
+    id: c.id,
+    tenant_id: c.tenantId,
+    parceiro_id: c.parceiroId,
+    lote_id: c.loteId,
+    registro_id: c.registroId,
+    motivo: c.motivo,
+    observacao: c.observacao,
+    status: c.status as Contestacao['status'],
+    aberta_em: c.abertaEm,
+    sla_vence_em: c.slaVenceEm,
+    resolvido_em: c.resolvidoEm,
+  };
+}
+
+function servicoDeLinha(s: ServicoRow): Servico {
+  return {
+    id: s.id,
+    tenant_id: s.tenantId,
+    nome: s.nome,
+    descricao: s.descricao,
+    preco: s.preco,
+    prazo_dias: s.prazoDias,
+    usa_listas: s.usaListas,
+    ativo: s.ativo,
+    created_at: s.createdAt,
+  };
+}
+
+function contratoDeLinha(c: ContratoRow): Contrato {
+  return {
+    id: c.id,
+    tenant_id: c.tenantId,
+    nome_arquivo: c.nomeArquivo,
+    mime_type: c.mimeType,
+    conteudo_base64: c.conteudoBase64,
+    atualizado_em: c.atualizadoEm,
   };
 }
 
@@ -422,6 +470,75 @@ async function reproveSubmissao(
   });
 }
 
+/** Reenvia comprovante de uma submissão reprovada — volta para a fila de conciliação. */
+async function attachComprovante(
+  submissaoId: string,
+  atorUserId: string,
+  comprovanteBase64: string,
+  mimeType: string,
+): Promise<Submissao> {
+  return db().transaction(async (tx) => {
+    const [sub] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
+    if (!sub) throw new Error(`Submissão ${submissaoId} não encontrada.`);
+    if (sub.paymentStatus !== 'reprovado') {
+      throw new Error('Só é possível anexar novo comprovante em uma submissão reprovada.');
+    }
+    if (!comprovanteBase64) throw new Error('Comprovante não informado.');
+
+    const now = new Date().toISOString();
+    await tx
+      .update(schema.submissoes)
+      .set({
+        paymentStatus: 'pendente',
+        comprovanteBase64,
+        comprovanteMime: mimeType,
+        revisadoPorUserId: null,
+      })
+      .where(eq(schema.submissoes.id, submissaoId));
+
+    const afetados = await tx
+      .select()
+      .from(schema.registros)
+      .where(and(eq(schema.registros.submissaoId, submissaoId), eq(schema.registros.processStatus, 'reprovado')));
+
+    for (const atual of afetados) {
+      await tx
+        .update(schema.registros)
+        .set({ processStatus: 'aguardando_pagamento', updatedAt: now })
+        .where(eq(schema.registros.id, atual.id));
+
+      await tx.insert(schema.processEvents).values({
+        id: novoId('pe'),
+        tenantId: atual.tenantId,
+        registroId: atual.id,
+        deStatus: atual.processStatus,
+        paraStatus: 'aguardando_pagamento',
+        atorTipo: 'parceiro',
+        atorUserId,
+        motivo: 'Novo comprovante anexado pelo parceiro',
+        metadata: { submissao_id: submissaoId },
+        ocorridoEm: now,
+      });
+    }
+
+    await tx.insert(schema.auditLog).values({
+      id: novoId('audit'),
+      tenantId: ABDCM_TENANT_ID,
+      atorUserId,
+      acao: 'REENVIO_COMPROVANTE_FINANCEIRO',
+      entidadeTipo: 'submissoes',
+      entidadeId: submissaoId,
+      depois: { mimeType },
+      ip: '127.0.0.1',
+      userAgent: 'ABDCM-Portal-Parceiro',
+      ocorridoEm: now,
+    });
+
+    const [submissaoRow] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
+    return submissaoDeLinha(submissaoRow!);
+  });
+}
+
 /** Cancela submissão pendente e libera os registros de volta para "pendente". */
 async function cancelSubmissao(submissaoId: string, atorUserId: string): Promise<void> {
   await db().transaction(async (tx) => {
@@ -601,6 +718,208 @@ async function revealDocument(registroId: string, userId: string): Promise<strin
   return reg.cpfCnpjRaw;
 }
 
+/** Atualiza dados de configuração do lote (ex.: prazo de encerramento) — só admin usa. */
+async function updateLote(
+  id: string,
+  atorUserId: string,
+  campos: { closesAt?: string; nome?: string },
+): Promise<Lote> {
+  const [atual] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, id));
+  if (!atual) throw new Error('Lote não encontrado.');
+
+  const patch: Partial<LoteRow> = {};
+  if (campos.closesAt) patch.closesAt = campos.closesAt;
+  if (campos.nome) patch.nome = campos.nome;
+
+  await db().update(schema.lotes).set(patch).where(eq(schema.lotes.id, id));
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: atual.tenantId,
+    atorUserId,
+    acao: 'LOTE_CONFIGURACAO_ALTERADA',
+    entidadeTipo: 'lotes',
+    entidadeId: id,
+    antes: { closesAt: atual.closesAt, nome: atual.nome },
+    depois: campos,
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: new Date().toISOString(),
+  });
+
+  return loteDeLinha({ ...atual, ...patch });
+}
+
+// ---------------------------------------------------------------------
+// Contestações ("Reclame Aqui")
+// ---------------------------------------------------------------------
+
+async function getContestacoes(): Promise<Contestacao[]> {
+  const linhas = await db().select().from(schema.contestacoes);
+  return linhas.map(contestacaoDeLinha);
+}
+
+/** Abre uma contestação. Bloqueada até 72h após a conclusão do lote — validado no servidor. */
+async function createContestacao(data: {
+  loteId: string;
+  registroId?: string | null;
+  motivo: string;
+  observacao?: string;
+  parceiroId: string;
+}): Promise<Contestacao> {
+  const [lote] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, data.loteId));
+  if (!lote) throw new Error('Lote não encontrado.');
+  if (lote.status !== 'concluido' || !lote.concluidoEm) {
+    throw new Error('Só é possível abrir contestação para uma Ação Coletiva já concluída.');
+  }
+
+  const horasDesdeConclusao = (Date.now() - new Date(lote.concluidoEm).getTime()) / 3_600_000;
+  if (horasDesdeConclusao < 72) {
+    const faltam = Math.ceil(72 - horasDesdeConclusao);
+    throw new Error(`Contestação libera 72h após a conclusão do lote — faltam aproximadamente ${faltam}h.`);
+  }
+
+  if (!data.motivo || !data.motivo.trim()) {
+    throw new Error('Motivo é obrigatório.');
+  }
+
+  const now = new Date();
+  const id = novoId('cont');
+  const novo = {
+    id,
+    tenantId: ABDCM_TENANT_ID,
+    parceiroId: data.parceiroId,
+    loteId: data.loteId,
+    registroId: data.registroId ?? null,
+    motivo: data.motivo.trim(),
+    observacao: data.observacao?.trim() || null,
+    status: 'aberta' as const,
+    abertaEm: now.toISOString(),
+    slaVenceEm: new Date(now.getTime() + 48 * 3_600_000).toISOString(),
+    resolvidoEm: null,
+  };
+
+  await db().insert(schema.contestacoes).values(novo);
+  return contestacaoDeLinha(novo as ContestacaoRow);
+}
+
+// ---------------------------------------------------------------------
+// Catálogo de serviços (configurado pelo admin)
+// ---------------------------------------------------------------------
+
+async function getServicos(): Promise<Servico[]> {
+  const linhas = await db().select().from(schema.servicos);
+  return linhas.map(servicoDeLinha);
+}
+
+async function createServico(data: {
+  nome: string;
+  descricao?: string;
+  preco: number;
+  prazoDias: number;
+  usaListas: boolean;
+}): Promise<Servico> {
+  if (!data.nome?.trim()) throw new Error('Nome do serviço é obrigatório.');
+  if (!Number.isInteger(data.preco) || data.preco < 0) throw new Error('Preço deve ser um valor inteiro em centavos.');
+  if (!Number.isInteger(data.prazoDias) || data.prazoDias < 0) throw new Error('Prazo deve ser um número inteiro de dias.');
+
+  const novo = {
+    id: novoId('serv'),
+    tenantId: ABDCM_TENANT_ID,
+    nome: data.nome.trim(),
+    descricao: data.descricao?.trim() || null,
+    preco: data.preco,
+    prazoDias: data.prazoDias,
+    usaListas: data.usaListas,
+    ativo: true,
+    createdAt: new Date().toISOString(),
+  };
+  await db().insert(schema.servicos).values(novo);
+  return servicoDeLinha(novo as ServicoRow);
+}
+
+async function updateServico(
+  id: string,
+  data: Partial<{ nome: string; descricao: string | null; preco: number; prazoDias: number; usaListas: boolean; ativo: boolean }>,
+): Promise<Servico> {
+  const [atual] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, id));
+  if (!atual) throw new Error('Serviço não encontrado.');
+
+  const patch: Partial<ServicoRow> = {};
+  if (data.nome !== undefined) patch.nome = data.nome;
+  if (data.descricao !== undefined) patch.descricao = data.descricao;
+  if (data.preco !== undefined) patch.preco = data.preco;
+  if (data.prazoDias !== undefined) patch.prazoDias = data.prazoDias;
+  if (data.usaListas !== undefined) patch.usaListas = data.usaListas;
+  if (data.ativo !== undefined) patch.ativo = data.ativo;
+
+  await db().update(schema.servicos).set(patch).where(eq(schema.servicos.id, id));
+  return servicoDeLinha({ ...atual, ...patch });
+}
+
+const SERVICO_DELETE_REASON_CODES = ['duplicado', 'descontinuado', 'cadastrado_por_engano', 'outro'] as const;
+
+/** Remove um serviço do catálogo. Ação destrutiva: exige reason_code de lista fechada (I11). */
+async function deleteServico(
+  id: string,
+  atorUserId: string,
+  reasonCode: string,
+  observacao?: string,
+): Promise<void> {
+  if (!SERVICO_DELETE_REASON_CODES.includes(reasonCode as (typeof SERVICO_DELETE_REASON_CODES)[number])) {
+    throw new Error('Motivo inválido para exclusão de serviço.');
+  }
+  const [atual] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, id));
+  if (!atual) throw new Error('Serviço não encontrado.');
+
+  await db().transaction(async (tx) => {
+    await tx.delete(schema.servicos).where(eq(schema.servicos.id, id));
+    await tx.insert(schema.auditLog).values({
+      id: novoId('audit'),
+      tenantId: ABDCM_TENANT_ID,
+      atorUserId,
+      acao: 'SERVICO_REMOVIDO',
+      entidadeTipo: 'servicos',
+      entidadeId: id,
+      antes: { nome: atual.nome, preco: atual.preco, prazoDias: atual.prazoDias },
+      depois: { reasonCode, observacao: observacao?.trim() || null },
+      ip: '127.0.0.1',
+      userAgent: 'ABDCM-Admin-Console',
+      ocorridoEm: new Date().toISOString(),
+    });
+  });
+}
+
+// ---------------------------------------------------------------------
+// Contrato-modelo (o admin anexa; associados/parceiros só leem)
+// ---------------------------------------------------------------------
+
+async function getContrato(): Promise<Contrato | null> {
+  const linhas = await db().select().from(schema.contratos).where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID));
+  const linha = linhas[0];
+  return linha ? contratoDeLinha(linha) : null;
+}
+
+/** Substitui o contrato vigente (mantém só um por tenant). */
+async function setContrato(data: { nomeArquivo: string; mimeType: string; conteudoBase64: string }): Promise<Contrato> {
+  if (!data.nomeArquivo || !data.conteudoBase64) {
+    throw new Error('Arquivo do contrato é obrigatório.');
+  }
+  return db().transaction(async (tx) => {
+    await tx.delete(schema.contratos).where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID));
+    const novo = {
+      id: novoId('contrato'),
+      tenantId: ABDCM_TENANT_ID,
+      nomeArquivo: data.nomeArquivo,
+      mimeType: data.mimeType,
+      conteudoBase64: data.conteudoBase64,
+      atualizadoEm: new Date().toISOString(),
+    };
+    await tx.insert(schema.contratos).values(novo);
+    return contratoDeLinha(novo as ContratoRow);
+  });
+}
+
 export const serverStore = {
   getSession,
   setRole,
@@ -619,4 +938,14 @@ export const serverStore = {
   deleteRegistro,
   transitionStatus,
   revealDocument,
+  updateLote,
+  attachComprovante,
+  getContestacoes,
+  createContestacao,
+  getServicos,
+  createServico,
+  updateServico,
+  deleteServico,
+  getContrato,
+  setContrato,
 };
