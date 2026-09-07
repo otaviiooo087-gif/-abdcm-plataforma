@@ -8,6 +8,19 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { serverStore } from './src/server/store';
 import { cleanDocument } from './src/lib/masking/documentMasker';
+import { avisarStatusProcesso, rodarAutomacoes } from './src/server/notificacoes';
+import { pixProviderConfigurado } from './src/integrations/pix/index';
+import { whatsAppProviderConfigurado } from './src/integrations/whatsapp/index';
+import type { Registro } from './src/domain/types';
+
+/** Dispara avisos de status por WhatsApp sem segurar a resposta HTTP — falha vira só um log. */
+function dispararAvisosDeStatus(registros: Registro[], novoStatus: string): void {
+  for (const registro of registros) {
+    avisarStatusProcesso(registro, novoStatus).catch((err) => {
+      console.error(`[automacoes] falha ao avisar status "${novoStatus}" do registro ${registro.id}:`, err);
+    });
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -149,12 +162,20 @@ async function startServer() {
     res.json(await serverStore.getSubmissoes());
   });
 
-  // 4.6 Pagar / Simular Confirmação PIX da Submissão
+  // 4.6 Pagar / Simular Confirmação PIX da Submissão — com Asaas real
+  // configurado, o parceiro NÃO pode se auto-confirmar (I1: regra no
+  // servidor, não só esconder o botão); só o webhook do banco ou um
+  // admin/suporte fazem essa confirmação manual.
   app.post('/api/submissoes/:id/pagar', async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const session = serverStore.getSession();
+      if (pixProviderConfigurado() && session.role === 'parceiro') {
+        res.status(403).json({ error: 'Com PIX real configurado, a confirmação vem do banco — aguarde ou fale com o suporte.' });
+        return;
+      }
       const result = await serverStore.paySubmissao(id, session.id);
+      dispararAvisosDeStatus(result.registros, 'pago');
       res.json({ success: true, ...result });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao processar pagamento';
@@ -169,6 +190,7 @@ async function startServer() {
       const { motivo } = req.body;
       const session = serverStore.getSession();
       const result = await serverStore.approveSubmissao(id, session.id, motivo);
+      dispararAvisosDeStatus(result.registros, 'pago');
       res.json({ success: true, ...result });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao aprovar submissão';
@@ -246,6 +268,8 @@ async function startServer() {
         session.id,
         atorTipo
       );
+
+      dispararAvisosDeStatus([result.registro], paraStatus);
 
       res.json({
         success: true,
@@ -376,6 +400,74 @@ async function startServer() {
     }
   });
 
+  // 6.4 PIX da submissão (retomar/ver o QR já gerado)
+  app.get('/api/submissoes/:id/pix', async (req: Request, res: Response) => {
+    const cobranca = await serverStore.getPixCobrancaPorSubmissao(req.params.id);
+    res.json(cobranca);
+  });
+
+  // 6.5 Webhook do provedor de PIX (Asaas) — I2/idempotente: webhook duplicado
+  // ou fora de ordem não regride nem repete a confirmação (ver paySubmissao).
+  app.post('/api/webhooks/pix', async (req: Request, res: Response) => {
+    try {
+      const result = await serverStore.confirmarPagamentoPixWebhook(req.body, req.headers as Record<string, string | string[] | undefined>);
+      if (result) dispararAvisosDeStatus(result.registros, 'pago');
+      res.json({ success: true, processado: Boolean(result) });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao processar webhook de PIX';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.6 Status das integrações (Configurações > APIs) — nunca expõe a chave, só se está configurada.
+  app.get('/api/config/status', (_req: Request, res: Response) => {
+    res.json({
+      pix: { provider: 'asaas', configurado: pixProviderConfigurado() },
+      whatsapp: { provider: 'z-api', configurado: whatsAppProviderConfigurado() },
+    });
+  });
+
+  // 6.7 Automações de WhatsApp — configuração das regras + log de envios
+  app.get('/api/automacoes', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getAutomacoesConfig());
+  });
+
+  app.patch('/api/automacoes/:chave', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM configura automações.' });
+        return;
+      }
+      const { ativo, config } = req.body;
+      const chave = req.params.chave as Parameters<typeof serverStore.setAutomacaoConfig>[0];
+      const atualizado = await serverStore.setAutomacaoConfig(chave, session.id, { ativo, config });
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar automação';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/automacoes/log', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getNotificacoesLog());
+  });
+
+  app.post('/api/automacoes/rodar-agora', async (_req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM roda automações manualmente.' });
+        return;
+      }
+      const resultado = await rodarAutomacoes();
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao rodar automações';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 7. Timeline / ProcessEvents do Registro (I2)
   app.get('/api/registros/:id/timeline', async (req: Request, res: Response) => {
     const { id } = req.params;
@@ -469,6 +561,19 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[ABDCM] Server running on http://0.0.0.0:${PORT}`);
   });
+
+  // Agendador simples das automações de WhatsApp (proximo_lote, follow_up_lista,
+  // pagamento_pendente) — sem fila/cron externo por enquanto, um único
+  // processo já dá conta do volume de uma associação. Cada regra é
+  // idempotente por conta própria (ver notificacoes.ts), então rodar de
+  // novo a cada intervalo é seguro.
+  const INTERVALO_AUTOMACOES_MS = 15 * 60 * 1000; // 15 minutos
+  setTimeout(() => {
+    rodarAutomacoes().catch((err) => console.error('[automacoes] falha na primeira rodada:', err));
+    setInterval(() => {
+      rodarAutomacoes().catch((err) => console.error('[automacoes] falha na rodada agendada:', err));
+    }, INTERVALO_AUTOMACOES_MS);
+  }, 30_000);
 }
 
 startServer();

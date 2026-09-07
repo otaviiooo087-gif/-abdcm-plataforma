@@ -155,3 +155,40 @@ export const contratos = pgTable('contratos', {
   conteudoBase64: text('conteudo_base64').notNull(),
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })
+
+export const pixCobrancas = pgTable('pix_cobrancas', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  submissaoId: text('submissao_id').notNull(),
+  provider: text('provider').notNull(),
+  txid: text('txid').notNull(),
+  qrCodeBase64: text('qr_code_base64'),
+  copiaECola: text('copia_e_cola').notNull(),
+  valor: integer('valor').notNull(),
+  status: text('status').notNull().default('pendente'),
+  expiraEm: timestamp('expira_em', { withTimezone: true, mode: 'string' }).notNull(),
+  criadoEm: timestamp('criado_em', { withTimezone: true, mode: 'string' }).notNull(),
+  confirmadoEm: timestamp('confirmado_em', { withTimezone: true, mode: 'string' }),
+})
+
+export const notificacoesEnviadas = pgTable('notificacoes_enviadas', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  tipo: text('tipo').notNull(),
+  destinatarioTelefone: text('destinatario_telefone').notNull(),
+  associadoId: text('associado_id'),
+  referenciaTipo: text('referencia_tipo'),
+  referenciaId: text('referencia_id'),
+  mensagem: text('mensagem').notNull(),
+  providerMessageId: text('provider_message_id'),
+  status: text('status').notNull().default('enviado'),
+  enviadoEm: timestamp('enviado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const automacoesConfig = pgTable('automacoes_config', {
+  chave: text('chave').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  ativo: boolean('ativo').notNull().default(true),
+  config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})

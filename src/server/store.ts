@@ -9,7 +9,7 @@
  * I9 (tenant_id em toda tabela).
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from './db/client.js';
 import * as schema from './db/schema.js';
 import { transitionProcessStatus } from '../domain/registros/stateMachine.js';
@@ -25,8 +25,14 @@ import type {
   Contestacao,
   Servico,
   Contrato,
+  PixCobranca,
+  NotificacaoEnviada,
+  AutomacaoConfig,
+  TipoNotificacao,
 } from '../domain/types.js';
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
+import { maskDocument } from '../lib/masking/documentMasker.js';
+import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
 
 export { ABDCM_TENANT_ID } from './mockData.js';
 export type { UserSession } from './mockData.js';
@@ -45,6 +51,9 @@ type AuditLogRow = typeof schema.auditLog.$inferSelect;
 type ContestacaoRow = typeof schema.contestacoes.$inferSelect;
 type ServicoRow = typeof schema.servicos.$inferSelect;
 type ContratoRow = typeof schema.contratos.$inferSelect;
+type PixCobrancaRow = typeof schema.pixCobrancas.$inferSelect;
+type NotificacaoEnviadaRow = typeof schema.notificacoesEnviadas.$inferSelect;
+type AutomacaoConfigRow = typeof schema.automacoesConfig.$inferSelect;
 
 function loteDeLinha(l: LoteRow): Lote {
   return {
@@ -210,6 +219,49 @@ function contratoDeLinha(c: ContratoRow): Contrato {
   };
 }
 
+function pixCobrancaDeLinha(p: PixCobrancaRow): PixCobranca {
+  return {
+    id: p.id,
+    tenant_id: p.tenantId,
+    submissao_id: p.submissaoId,
+    provider: p.provider,
+    txid: p.txid,
+    qr_code_base64: p.qrCodeBase64,
+    copia_e_cola: p.copiaECola,
+    valor: p.valor,
+    status: p.status as PixCobranca['status'],
+    expira_em: p.expiraEm,
+    criado_em: p.criadoEm,
+    confirmado_em: p.confirmadoEm,
+  };
+}
+
+function notificacaoDeLinha(n: NotificacaoEnviadaRow): NotificacaoEnviada {
+  return {
+    id: n.id,
+    tenant_id: n.tenantId,
+    tipo: n.tipo as TipoNotificacao,
+    destinatario_telefone: n.destinatarioTelefone,
+    associado_id: n.associadoId,
+    referencia_tipo: n.referenciaTipo,
+    referencia_id: n.referenciaId,
+    mensagem: n.mensagem,
+    provider_message_id: n.providerMessageId,
+    status: n.status,
+    enviado_em: n.enviadoEm,
+  };
+}
+
+function automacaoConfigDeLinha(a: AutomacaoConfigRow): AutomacaoConfig {
+  return {
+    chave: a.chave as TipoNotificacao,
+    tenant_id: a.tenantId,
+    ativo: a.ativo,
+    config: a.config,
+    atualizado_em: a.atualizadoEm,
+  };
+}
+
 function novoId(prefixo: string): string {
   return `${prefixo}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -276,17 +328,53 @@ async function getAuditLogs(): Promise<AuditLog[]> {
 // ---------------------------------------------------------------------
 
 /** Submete lote de registros para processamento (cria Submissão PIX e bloqueia nomes). */
+const PIX_EXPIRACAO_SEGUNDOS = 60 * 60; // 60 minutos, conforme CLAUDE.md
+
+/** Gera a cobrança PIX (mock ou Asaas, conforme PIX_PROVIDER) pra uma submissão recém-criada. */
+async function criarCobrancaPix(submissao: Submissao): Promise<PixCobranca> {
+  const parceiro = SEED_USERS.find((u) => u.parceiro_id === submissao.parceiro_id);
+  const provider = getPixProvider();
+
+  const cobranca = await provider.criarCobranca({
+    valor: submissao.valor_total,
+    referenciaExterna: submissao.id,
+    pagador: { nome: parceiro?.nome ?? 'Parceiro ABDCM', cpfCnpj: '00000000000' },
+    expiraEmSegundos: PIX_EXPIRACAO_SEGUNDOS,
+    descricao: `ABDCM — ${submissao.nomes_count} nome(s) na Ação Coletiva`,
+  });
+
+  const id = novoId('pix');
+  const now = new Date().toISOString();
+  await db().insert(schema.pixCobrancas).values({
+    id,
+    tenantId: ABDCM_TENANT_ID,
+    submissaoId: submissao.id,
+    provider: pixProviderConfigurado() ? 'asaas' : 'mock',
+    txid: cobranca.txid,
+    qrCodeBase64: cobranca.qrCodeBase64 || null,
+    copiaECola: cobranca.copiaECola,
+    valor: submissao.valor_total,
+    status: 'pendente',
+    expiraEm: cobranca.expiraEm.toISOString(),
+    criadoEm: now,
+  });
+
+  const [linha] = await db().select().from(schema.pixCobrancas).where(eq(schema.pixCobrancas.id, id));
+  return pixCobrancaDeLinha(linha!);
+}
+
 async function submitBatch(
   registroIds: string[],
   atorUserId: string,
-): Promise<{ submissao: Submissao; registros: Registro[] }> {
+): Promise<{ submissao: Submissao; registros: Registro[]; pixCobranca: PixCobranca | null }> {
   if (!registroIds || registroIds.length === 0) {
     throw new Error('Nenhum registro selecionado para envio.');
   }
 
-  return db().transaction(async (tx) => {
-    const [lote] = await tx.select().from(schema.lotes).where(eq(schema.lotes.id, 'lote-124'));
-    const precoUnitario = lote?.precoPorNome ?? 25000;
+  const lote = await resolverLoteVigente();
+  const precoUnitario = lote?.precoPorNome ?? 25000;
+
+  const { submissao, registros } = await db().transaction(async (tx) => {
     const submissaoId = novoId('sub');
     const now = new Date().toISOString();
 
@@ -306,11 +394,29 @@ async function submitBatch(
       const [atual] = await tx.select().from(schema.registros).where(eq(schema.registros.id, regId));
       if (!atual) continue;
 
+      // I4: unit_price congela aqui, no momento do envio — não muda depois.
       await tx
         .update(schema.registros)
-        .set({ submissaoId, processStatus: 'enviado', isLocked: true, enviadoEm: now, updatedAt: now })
+        .set({
+          submissaoId,
+          processStatus: 'enviado',
+          isLocked: true,
+          unitPrice: precoUnitario,
+          enviadoEm: now,
+          updatedAt: now,
+        })
         .where(eq(schema.registros.id, regId));
-      atualizados.push(registroDeLinha({ ...atual, submissaoId, processStatus: 'enviado', isLocked: true, enviadoEm: now, updatedAt: now }));
+      atualizados.push(
+        registroDeLinha({
+          ...atual,
+          submissaoId,
+          processStatus: 'enviado',
+          isLocked: true,
+          unitPrice: precoUnitario,
+          enviadoEm: now,
+          updatedAt: now,
+        }),
+      );
 
       await tx.insert(schema.processEvents).values({
         id: novoId('pe'),
@@ -320,7 +426,7 @@ async function submitBatch(
         paraStatus: 'enviado',
         atorTipo: 'parceiro',
         atorUserId,
-        motivo: `Envio de lista (${registroIds.length} nomes) para Ação Coletiva 124`,
+        motivo: `Envio de lista (${registroIds.length} nomes) para ${lote?.nome ?? 'Ação Coletiva'}`,
         metadata: { submissao_id: submissaoId, valor_unitario: precoUnitario },
         ocorridoEm: now,
       });
@@ -342,6 +448,18 @@ async function submitBatch(
     const [submissaoRow] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
     return { submissao: submissaoDeLinha(submissaoRow!), registros: atualizados };
   });
+
+  // Geração do PIX é uma chamada de rede — fica fora da transação de
+  // propósito. Se falhar, a submissão continua existindo (pendente) e o
+  // parceiro pode tentar de novo pela tela; nunca derruba o envio da lista.
+  let pixCobranca: PixCobranca | null = null;
+  try {
+    pixCobranca = await criarCobrancaPix(submissao);
+  } catch (err) {
+    console.error(`Falha ao gerar PIX pra submissão ${submissao.id}:`, err);
+  }
+
+  return { submissao, registros, pixCobranca };
 }
 
 /** Confirma pagamento PIX da submissão (webhook / simulação). */
@@ -353,11 +471,22 @@ async function paySubmissao(
     const [sub] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
     if (!sub) throw new Error(`Submissão ${submissaoId} não encontrada.`);
 
+    // Idempotência (webhook duplicado / dupla confirmação não reprocessa).
+    if (sub.paymentStatus === 'pago') {
+      const jaAtualizados = await tx.select().from(schema.registros).where(eq(schema.registros.submissaoId, submissaoId));
+      return { submissao: submissaoDeLinha(sub), registros: jaAtualizados.map(registroDeLinha) };
+    }
+
     const now = new Date().toISOString();
     await tx
       .update(schema.submissoes)
       .set({ paymentStatus: 'pago', confirmadoEm: now })
       .where(eq(schema.submissoes.id, submissaoId));
+
+    await tx
+      .update(schema.pixCobrancas)
+      .set({ status: 'pago', confirmadoEm: now })
+      .where(eq(schema.pixCobrancas.submissaoId, submissaoId));
 
     const afetados = await tx.select().from(schema.registros).where(eq(schema.registros.submissaoId, submissaoId));
     const atualizados: Registro[] = [];
@@ -385,6 +514,25 @@ async function paySubmissao(
     const [submissaoRow] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
     return { submissao: submissaoDeLinha(submissaoRow!), registros: atualizados };
   });
+}
+
+/**
+ * Recebe o webhook do provedor de PIX, valida e — se for confirmação de
+ * pagamento — casa com a cobrança pelo txid e chama paySubmissao (que já é
+ * idempotente). Webhook fora de ordem ou de uma cobrança não confirmada
+ * (pendente/expirado) não altera nada.
+ */
+async function confirmarPagamentoPixWebhook(
+  payload: unknown,
+  headers: Record<string, string | string[] | undefined>,
+): Promise<{ submissao: Submissao; registros: Registro[] } | null> {
+  const evento = await getPixProvider().validarWebhook(payload, headers);
+  if (evento.status !== 'pago') return null;
+
+  const [cobranca] = await db().select().from(schema.pixCobrancas).where(eq(schema.pixCobrancas.txid, evento.txid));
+  if (!cobranca) throw new Error(`Cobrança PIX com txid "${evento.txid}" não encontrada.`);
+
+  return paySubmissao(cobranca.submissaoId, 'system-pix');
 }
 
 /** Aprova submissão na conciliação bancária. */
@@ -572,6 +720,14 @@ async function cancelSubmissao(submissaoId: string, atorUserId: string): Promise
   });
 }
 
+/** Lote vigente pra qualquer fluxo que precise de "o lote de hoje": o aberto, ou lote-124 de fallback. */
+async function resolverLoteVigente(): Promise<LoteRow | undefined> {
+  const abertos = await db().select().from(schema.lotes).where(eq(schema.lotes.status, 'aberto'));
+  if (abertos[0]) return abertos[0];
+  const [fallback] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, 'lote-124'));
+  return fallback;
+}
+
 /** Adiciona novo registro avulso ou vindo de planilha. */
 async function addRegistro(data: {
   nome: string;
@@ -588,7 +744,9 @@ async function addRegistro(data: {
   const limpo = data.cpf_cnpj.replace(/\D/g, '');
   const isCnpj = limpo.length > 11;
   const tipo = data.tipo_documento ?? (isCnpj ? 'cnpj' : 'cpf');
-  const loteId = data.lote_id ?? 'lote-124';
+  const loteVigente = data.lote_id ? undefined : await resolverLoteVigente();
+  const loteId = data.lote_id ?? loteVigente?.id ?? 'lote-124';
+  const precoUnitario = loteVigente?.precoPorNome ?? 25000;
   const now = new Date().toISOString();
   const id = novoId('reg');
   const iniciais = data.nome
@@ -601,19 +759,39 @@ async function addRegistro(data: {
   const todos = await db().select({ id: schema.registros.id }).from(schema.registros);
   const total = todos.length;
 
+  // I6: cpf_cnpj sempre mascarado por padrão — o valor completo só existe em
+  // cpf_cnpj_raw, revelado sob clique via revealDocument() com auditoria.
+  // Cria um Associado de verdade (não um id fabricado) sempre que houver
+  // telefone — é o que torna o bot/automação de WhatsApp possível (I7).
+  const associadoId = data.telefone_whatsapp ? novoId('assoc') : `assoc-${id}`;
+  if (data.telefone_whatsapp) {
+    await db().insert(schema.associados).values({
+      id: associadoId,
+      tenantId: ABDCM_TENANT_ID,
+      parceiroId: 'parc-001',
+      nome: data.nome.trim(),
+      cpfCnpjRaw: limpo,
+      cpfCnpj: maskDocument(limpo),
+      tipoDocumento: tipo,
+      telefoneWhatsapp: data.telefone_whatsapp.trim(),
+      statusFiliacao: 'pre_cadastro',
+      createdAt: now,
+    });
+  }
+
   const novo = {
     id,
     tenantId: ABDCM_TENANT_ID,
     loteId,
     parceiroId: 'parc-001',
-    associadoId: `assoc-${id}`,
+    associadoId,
     nome: data.nome.trim(),
     cpfCnpjRaw: limpo,
-    cpfCnpj: data.cpf_cnpj.trim(),
+    cpfCnpj: maskDocument(limpo),
     tipoDocumento: tipo,
     processStatus: 'pendente' as const,
     isLocked: false,
-    unitPrice: 25000,
+    unitPrice: precoUnitario,
     isBonus: false,
     protocolCode: `ABDCM-AC124-${total + 1}-${iniciais}`,
     origem: data.origem ?? 'manual',
@@ -920,6 +1098,119 @@ async function setContrato(data: { nomeArquivo: string; mimeType: string; conteu
   });
 }
 
+// ---------------------------------------------------------------------
+// PIX (integrations/pix) e Automações de WhatsApp (integrations/whatsapp)
+// ---------------------------------------------------------------------
+
+async function getPixCobrancaPorSubmissao(submissaoId: string): Promise<PixCobranca | null> {
+  const linhas = await db()
+    .select()
+    .from(schema.pixCobrancas)
+    .where(eq(schema.pixCobrancas.submissaoId, submissaoId));
+  const linha = linhas[linhas.length - 1];
+  return linha ? pixCobrancaDeLinha(linha) : null;
+}
+
+// Metadados fixos de cada regra de automação — a UI (aba Automações) usa
+// isso pra mostrar nome/descrição/exemplo mesmo antes de existir linha no
+// banco; o banco só guarda o ativo/inativo e os parâmetros configuráveis.
+export const AUTOMACOES_DISPONIVEIS: Record<
+  TipoNotificacao,
+  { nome: string; descricao: string; exemplo: string; configPadrao: Record<string, unknown> }
+> = {
+  proximo_lote: {
+    nome: 'Próxima Ação Coletiva abrindo',
+    descricao: 'Avisa todos os associados ativos quando uma nova lista (lote) abre pra captação.',
+    exemplo:
+      'Boa tarde! Aqui é da ABDCM 👋 Passando pra avisar que a próxima Lista Limpa Nome (AÇÃO COLETIVA 125) abre quarta-feira às 18:00. Aproveita pra anexar seus nomes com o parceiro que cuidou da sua filiação!',
+    configPadrao: {},
+  },
+  follow_up_lista: {
+    nome: 'Follow-up antes do encerramento',
+    descricao: 'Lembra associados que ainda não entraram na lista aberta, um pouco antes dela fechar.',
+    exemplo:
+      'Oi Luiz! Notei que você ainda não anexou os seus nomes na nossa plataforma. Anexa agora pra não perder a oportunidade de ter seus nomes limpos!',
+    configPadrao: { horasAntesDoFechamento: 24 },
+  },
+  status_processo: {
+    nome: 'Status do processo',
+    descricao: 'Avisa quando os nomes do associado avançam de fase (protocolado, baixado, recusado).',
+    exemplo:
+      'Boa tarde João! Passando pra avisar que os nomes anexados na Lista de quarta-feira (Lote 5465) — Serasa, SPC, Boa Vista, Cartórios de Protesto — se atribuíram ao processo e estamos aguardando as baixas começarem.',
+    configPadrao: {},
+  },
+  pagamento_pendente: {
+    nome: 'Pagamento PIX pendente',
+    descricao: 'Pergunta se deu algum problema quando o PIX de uma lista fica pendente por muito tempo.',
+    exemplo:
+      'Oi Ana! Vimos que o pagamento PIX da sua lista ainda está pendente. Aconteceu algum problema? Se precisar de ajuda é só responder por aqui 🙂',
+    configPadrao: { horasParaAvisar: 12 },
+  },
+};
+
+export async function getAutomacoesConfig(): Promise<AutomacaoConfig[]> {
+  const linhas = await db().select().from(schema.automacoesConfig).where(eq(schema.automacoesConfig.tenantId, ABDCM_TENANT_ID));
+  const porChave = new Map(linhas.map((l) => [l.chave, l]));
+  const agora = new Date().toISOString();
+
+  return (Object.keys(AUTOMACOES_DISPONIVEIS) as TipoNotificacao[]).map((chave) => {
+    const linha = porChave.get(chave);
+    if (linha) return automacaoConfigDeLinha(linha);
+    return {
+      chave,
+      tenant_id: ABDCM_TENANT_ID,
+      ativo: true,
+      config: AUTOMACOES_DISPONIVEIS[chave].configPadrao,
+      atualizado_em: agora,
+    };
+  });
+}
+
+async function setAutomacaoConfig(
+  chave: TipoNotificacao,
+  atorUserId: string,
+  campos: { ativo?: boolean; config?: Record<string, unknown> },
+): Promise<AutomacaoConfig> {
+  if (!(chave in AUTOMACOES_DISPONIVEIS)) throw new Error(`Automação "${chave}" não existe.`);
+
+  const now = new Date().toISOString();
+  const [existente] = await db().select().from(schema.automacoesConfig).where(eq(schema.automacoesConfig.chave, chave));
+
+  const ativo = campos.ativo ?? existente?.ativo ?? true;
+  const config = campos.config ?? existente?.config ?? AUTOMACOES_DISPONIVEIS[chave].configPadrao;
+
+  if (existente) {
+    await db().update(schema.automacoesConfig).set({ ativo, config, atualizadoEm: now }).where(eq(schema.automacoesConfig.chave, chave));
+  } else {
+    await db().insert(schema.automacoesConfig).values({ chave, tenantId: ABDCM_TENANT_ID, ativo, config, atualizadoEm: now });
+  }
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: ABDCM_TENANT_ID,
+    atorUserId,
+    acao: 'AUTOMACAO_CONFIGURACAO_ALTERADA',
+    entidadeTipo: 'automacoes_config',
+    entidadeId: chave,
+    depois: { ativo, config },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: now,
+  });
+
+  return { chave, tenant_id: ABDCM_TENANT_ID, ativo, config, atualizado_em: now };
+}
+
+async function getNotificacoesLog(limite = 50): Promise<NotificacaoEnviada[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.notificacoesEnviadas)
+    .where(eq(schema.notificacoesEnviadas.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.notificacoesEnviadas.enviadoEm))
+    .limit(limite);
+  return linhas.map(notificacaoDeLinha);
+}
+
 export const serverStore = {
   getSession,
   setRole,
@@ -948,4 +1239,9 @@ export const serverStore = {
   deleteServico,
   getContrato,
   setContrato,
+  confirmarPagamentoPixWebhook,
+  getPixCobrancaPorSubmissao,
+  getAutomacoesConfig,
+  setAutomacaoConfig,
+  getNotificacoesLog,
 };

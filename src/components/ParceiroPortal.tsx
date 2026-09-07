@@ -90,6 +90,29 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   const [showEnviarModal, setShowEnviarModal] = useState(false);
   const [showPixModal, setShowPixModal] = useState(false);
   const [activeSubmissao, setActiveSubmissao] = useState<SubmissaoData | null>(null);
+  const [activePixPayload, setActivePixPayload] = useState<string | undefined>(undefined);
+  const [pixReal, setPixReal] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/config/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((status: { pix?: { configurado: boolean } } | null) => setPixReal(Boolean(status?.pix?.configurado)))
+      .catch(() => setPixReal(false));
+  }, []);
+
+  // Abre o modal de PIX buscando o QR real já gerado pra essa submissão
+  // (provedor mock ou Asaas, conforme PIX_PROVIDER) — se ainda não tiver
+  // nenhuma cobrança (ex.: submissão antiga), o modal cai no payload de
+  // exemplo dele mesmo.
+  const handleOpenPix = (sub: SubmissaoData) => {
+    setActiveSubmissao(sub);
+    setActivePixPayload(undefined);
+    setShowPixModal(true);
+    fetch(`/api/submissoes/${sub.id}/pix`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((cobranca: { copia_e_cola: string } | null) => setActivePixPayload(cobranca?.copia_e_cola))
+      .catch(() => setActivePixPayload(undefined));
+  };
 
   // Carrega submissões pendentes
   const loadSubmissoes = () => {
@@ -291,6 +314,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
     if (res.ok) {
       const data = await res.json();
       setActiveSubmissao(data.submissao);
+      setActivePixPayload(data.pixCobranca?.copia_e_cola);
       setShowPixModal(true);
       setSelectedIds([]);
       loadSubmissoes();
@@ -475,10 +499,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
                             {sub.payment_status === 'pendente' && (
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setActiveSubmissao(sub);
-                                  setShowPixModal(true);
-                                }}
+                                onClick={() => handleOpenPix(sub)}
                                 className="px-3 py-1 text-xs font-bold text-[#148296] hover:underline cursor-pointer"
                               >
                                 Pagar PIX
@@ -520,6 +541,8 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
             onClose={() => setShowPixModal(false)}
             valorTotalFormatted={formatCurrencyBRL(activeSubmissao.valor_total)}
             submissaoId={activeSubmissao.id}
+            pixPayload={activePixPayload}
+            permitirSimular={!pixReal}
             onSimulatePaid={() => {
               loadSubmissoes();
               onRefreshData?.();
@@ -944,10 +967,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
               Cancelar Envio
             </button>
             <button
-              onClick={() => {
-                setActiveSubmissao(pendingSubmissao);
-                setShowPixModal(true);
-              }}
+              onClick={() => handleOpenPix(pendingSubmissao)}
               className="px-4 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
             >
               <QrCode className="w-4 h-4" />
@@ -1163,6 +1183,8 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
           onClose={() => setShowPixModal(false)}
           valorTotalFormatted={formatCurrencyBRL(activeSubmissao.valor_total)}
           submissaoId={activeSubmissao.id}
+          pixPayload={activePixPayload}
+            permitirSimular={!pixReal}
           onSimulatePaid={() => {
             loadSubmissoes();
             onRefreshData?.();
