@@ -37,6 +37,7 @@ import { ImportarListaModal } from './partner/ImportarListaModal.js';
 import { EnviarListaModal } from './partner/EnviarListaModal.js';
 import { AnexarDocumentosModal } from './partner/AnexarDocumentosModal.js';
 import { PixPagamentoModal } from './partner/PixPagamentoModal.js';
+import { PagamentoConfirmadoModal } from './partner/PagamentoConfirmadoModal.js';
 import { MinhasListasView } from './partner/MinhasListasView.js';
 import { HomeView } from './partner/HomeView.js';
 
@@ -149,6 +150,41 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
     loadSubmissoes();
   }, []);
 
+  // Popup de sucesso exibido assim que o pagamento é confirmado (seja pelo
+  // botão de simulação, seja pelo webhook do provedor real de PIX).
+  const [showSucessoModal, setShowSucessoModal] = useState(false);
+  const [nomesIncluidosCount, setNomesIncluidosCount] = useState<number | undefined>(undefined);
+
+  const handlePagamentoConfirmado = (nomesCount?: number) => {
+    setShowPixModal(false);
+    setNomesIncluidosCount(nomesCount);
+    setShowSucessoModal(true);
+    loadSubmissoes();
+    onRefreshData?.();
+  };
+
+  // Enquanto o modal de PIX está aberto, fica de olho na confirmação do
+  // pagamento — necessário pro fluxo real (Asaas), onde é o webhook do
+  // banco que confirma, não uma ação do parceiro na tela.
+  useEffect(() => {
+    if (!showPixModal || !activeSubmissao) return;
+    const subId = activeSubmissao.id;
+    const interval = setInterval(() => {
+      fetch('/api/submissoes')
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data: SubmissaoData[]) => {
+          const atual = data.find((s) => s.id === subId);
+          if (atual?.payment_status === 'pago') {
+            setSubmissoes(data);
+            handlePagamentoConfirmado(atual.nomes_count);
+          }
+        })
+        .catch(() => {});
+    }, 4000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showPixModal, activeSubmissao?.id]);
+
   // Reclame Aqui / Contestações
   const [contestacoes, setContestacoes] = useState<Contestacao[]>([]);
   const [contestacaoLoteId, setContestacaoLoteId] = useState('');
@@ -255,8 +291,15 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
     }
   };
 
+  // Assim que o pagamento é aprovado, o registro sai da tela "Enviar Limpa
+  // Nome" (que é sobre montar e pagar a lista) e passa a existir só como
+  // card em "Minhas Listas" (que é sobre acompanhar o processo).
+  const registrosNaoPagos = registros.filter(
+    (r) => !['pago', 'aguardando_protocolo', 'protocolado', 'baixado', 'recusado'].includes(r.process_status),
+  );
+
   // Filtros de registros
-  const filteredRegistros = registros.filter((r) => {
+  const filteredRegistros = registrosNaoPagos.filter((r) => {
     if (search.trim()) {
       const q = search.toLowerCase();
       const match =
@@ -277,7 +320,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   const pagosCount = registros.filter((r) => r.process_status === 'pago').length;
   const baixadosCount = registros.filter((r) => r.process_status === 'baixado').length;
 
-  const totalNomes = registros.length;
+  const totalNomes = registrosNaoPagos.length;
   const totalValor = totalNomes * precoUnitario;
 
   // Seleção múltipla
@@ -574,12 +617,19 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
             submissaoId={activeSubmissao.id}
             pixPayload={activePixPayload}
             permitirSimular={!pixReal}
-            onSimulatePaid={() => {
-              loadSubmissoes();
-              onRefreshData?.();
-            }}
+            onSimulatePaid={() => handlePagamentoConfirmado(activeSubmissao.nomes_count)}
           />
         )}
+
+        <PagamentoConfirmadoModal
+          isOpen={showSucessoModal}
+          nomesCount={nomesIncluidosCount}
+          onClose={() => setShowSucessoModal(false)}
+          onVerMinhasListas={() => {
+            setShowSucessoModal(false);
+            onSelectParceiroTab?.('minhas-listas');
+          }}
+        />
       </div>
     );
   }
@@ -1059,8 +1109,6 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
             <option value="todos">Todos os pagamentos</option>
             <option value="pendente">Não Enviado ({pendentesCount})</option>
             <option value="enviado">Pendente de Pagamento ({enviadosCount})</option>
-            <option value="pago">Aprovado ({pagosCount})</option>
-            <option value="baixado">Aprovado — Baixado ({baixadosCount})</option>
           </select>
         </div>
 
@@ -1276,13 +1324,20 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
           valorTotalFormatted={formatCurrencyBRL(activeSubmissao.valor_total)}
           submissaoId={activeSubmissao.id}
           pixPayload={activePixPayload}
-            permitirSimular={!pixReal}
-          onSimulatePaid={() => {
-            loadSubmissoes();
-            onRefreshData?.();
-          }}
+          permitirSimular={!pixReal}
+          onSimulatePaid={() => handlePagamentoConfirmado(activeSubmissao.nomes_count)}
         />
       )}
+
+      <PagamentoConfirmadoModal
+        isOpen={showSucessoModal}
+        nomesCount={nomesIncluidosCount}
+        onClose={() => setShowSucessoModal(false)}
+        onVerMinhasListas={() => {
+          setShowSucessoModal(false);
+          onSelectParceiroTab?.('minhas-listas');
+        }}
+      />
     </div>
   );
 };
