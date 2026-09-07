@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { Lote, Registro, AuditLog, ProcessStatus, Submissao } from '../domain/types.js';
+import { Lote, Registro, Associado, AuditLog, ProcessStatus, Submissao } from '../domain/types.js';
 import { StatusBadge } from './StatusBadge.js';
 import { formatCurrencyBRL } from '../lib/money/index.js';
 import { UserSession } from '../server/mockData.js';
 import { AdminProcessosTab } from './admin/AdminProcessosTab.js';
+import { AdminAssociadosTab } from './admin/AdminAssociadosTab.js';
 import { AdminFinanceiroTab } from './admin/AdminFinanceiroTab.js';
 import { AdminConfiguracoesTab } from './admin/AdminConfiguracoesTab.js';
 import { AdminDashboardTab } from './admin/AdminDashboardTab.js';
@@ -11,13 +12,14 @@ import { AdminServicosTab } from './admin/AdminServicosTab.js';
 import { AdminAutomacoesTab } from './admin/AdminAutomacoesTab.js';
 import { ArrowRightLeft, Search, RefreshCw, Download, Plus, X, Check } from 'lucide-react';
 
-type AdminTab = 'dashboard' | 'processos' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
+type AdminTab = 'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
 
 interface AdminConsoleProps {
   activeTab: AdminTab;
   onSelectTab?: (tab: AdminTab) => void;
   lotes: Lote[];
   registros: Registro[];
+  associados: Associado[];
   submissoes?: Submissao[];
   auditLogs: AuditLog[];
   session: UserSession | null;
@@ -31,6 +33,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   onSelectTab,
   lotes,
   registros,
+  associados,
   submissoes = [],
   auditLogs,
   session,
@@ -291,6 +294,11 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           onRefreshData={onRefreshData}
         />
       )}
+
+      {/* ==================================================== */}
+      {/* ABA: ASSOCIADOS (ADMIN)                              */}
+      {/* ==================================================== */}
+      {activeTab === 'associados' && <AdminAssociadosTab associados={associados} registros={registros} />}
 
       {/* ==================================================== */}
       {/* ABA: FINANCEIRO & CONCILIAÇÃO BANCÁRIA (ADMIN)       */}

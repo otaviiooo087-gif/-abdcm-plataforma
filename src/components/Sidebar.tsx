@@ -17,14 +17,15 @@ import {
   ChevronRight,
   Settings,
   Zap,
+  Users,
 } from 'lucide-react';
 
 interface SidebarProps {
   currentSurface: 'parceiro' | 'admin' | 'publico';
   onSelectSurface: (surface: 'parceiro' | 'admin' | 'publico') => void;
-  adminTab: 'dashboard' | 'processos' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
+  adminTab: 'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
   onSelectAdminTab: (
-    tab: 'dashboard' | 'processos' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle',
+    tab: 'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle',
   ) => void;
   parceiroTab?: string;
   onSelectParceiroTab?: (tab: string) => void;
@@ -226,6 +227,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <Layers className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
                 <span>Processos</span>
+              </button>
+
+              <button
+                onClick={() => onSelectAdminTab('associados')}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
+                  adminTab === 'associados'
+                    ? 'bg-[#0c4f5d] font-bold text-white shadow-2xs'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Users className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
+                <span>Associados</span>
               </button>
 
               <button
