@@ -688,8 +688,15 @@ async function attachComprovante(
 }
 
 /** Cancela submissão pendente e libera os registros de volta para "pendente". */
-async function cancelSubmissao(submissaoId: string, atorUserId: string): Promise<void> {
+async function cancelSubmissao(
+  submissaoId: string,
+  atorUserId: string,
+  atorTipo: 'parceiro' | 'admin' = 'admin',
+): Promise<void> {
   await db().transaction(async (tx) => {
+    const [submissao] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
+    if (!submissao) throw new Error(`Submissão ${submissaoId} não encontrada.`);
+
     const afetados = await tx
       .select()
       .from(schema.registros)
@@ -708,7 +715,7 @@ async function cancelSubmissao(submissaoId: string, atorUserId: string): Promise
         registroId: atual.id,
         deStatus: 'enviado',
         paraStatus: 'pendente',
-        atorTipo: 'admin',
+        atorTipo,
         atorUserId,
         motivo: 'Cancelamento da submissão',
         metadata: { submissao_id: submissaoId },
@@ -716,6 +723,9 @@ async function cancelSubmissao(submissaoId: string, atorUserId: string): Promise
       });
     }
 
+    // A cobrança PIX referencia a submissão (FK) — precisa sair antes, senão
+    // o delete abaixo esbarra na constraint e a submissão nunca é cancelada.
+    await tx.delete(schema.pixCobrancas).where(eq(schema.pixCobrancas.submissaoId, submissaoId));
     await tx.delete(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
   });
 }
