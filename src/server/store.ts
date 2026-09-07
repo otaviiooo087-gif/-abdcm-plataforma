@@ -33,6 +33,7 @@ import type {
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
 import { maskDocument } from '../lib/masking/documentMasker.js';
 import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
+import { getStorageProvider, storageProviderConfigurado } from '../integrations/storage/index.js';
 
 export { ABDCM_TENANT_ID } from './mockData.js';
 export type { UserSession } from './mockData.js';
@@ -54,6 +55,7 @@ type ContratoRow = typeof schema.contratos.$inferSelect;
 type PixCobrancaRow = typeof schema.pixCobrancas.$inferSelect;
 type NotificacaoEnviadaRow = typeof schema.notificacoesEnviadas.$inferSelect;
 type AutomacaoConfigRow = typeof schema.automacoesConfig.$inferSelect;
+type DocumentoAssociadoRow = typeof schema.documentosAssociado.$inferSelect;
 
 function loteDeLinha(l: LoteRow): Lote {
   return {
@@ -1221,6 +1223,190 @@ async function getNotificacoesLog(limite = 50): Promise<NotificacaoEnviada[]> {
   return linhas.map(notificacaoDeLinha);
 }
 
+// ---------------------------------------------------------------------
+// Documentos do associado (CNH/RG) — upload em massa direto pro storage,
+// o servidor só autoriza (URL assinada) e confirma depois que o navegador
+// já mandou o arquivo. Ver src/integrations/storage.
+// ---------------------------------------------------------------------
+
+const TIPOS_DOCUMENTO = ['cnh', 'rg'] as const;
+type TipoDocumento = (typeof TIPOS_DOCUMENTO)[number];
+const URL_STORAGE_EXPIRA_SEGUNDOS = 15 * 60;
+
+function extensaoPorMime(mime: string): string {
+  const mapa: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'application/pdf': 'pdf',
+  };
+  return mapa[mime] ?? 'bin';
+}
+
+export interface PreviewDocumentoItem {
+  cpf_cnpj_raw: string;
+  associado_id: string | null;
+  nome: string | null;
+  ja_tem_cnh: boolean;
+  ja_tem_rg: boolean;
+}
+
+/** I3: mostra o que vai casar com quem antes de mover qualquer byte de arquivo. */
+async function previewDocumentos(cpfsCnpjs: string[], parceiroId?: string): Promise<PreviewDocumentoItem[]> {
+  const limpos = [...new Set(cpfsCnpjs.map((c) => c.replace(/\D/g, '')).filter(Boolean))];
+  if (limpos.length === 0) return [];
+
+  const todosAssociados = await db().select().from(schema.associados).where(eq(schema.associados.tenantId, ABDCM_TENANT_ID));
+  const porCpf = new Map(todosAssociados.map((a) => [a.cpfCnpjRaw, a]));
+
+  const todosDocs = await db().select().from(schema.documentosAssociado).where(eq(schema.documentosAssociado.tenantId, ABDCM_TENANT_ID));
+  const docsPorAssociado = new Map<string, Set<string>>();
+  for (const d of todosDocs) {
+    if (!docsPorAssociado.has(d.associadoId)) docsPorAssociado.set(d.associadoId, new Set());
+    docsPorAssociado.get(d.associadoId)!.add(d.tipo);
+  }
+
+  return limpos.map((cpf) => {
+    const associado = porCpf.get(cpf);
+    if (!associado || (parceiroId && associado.parceiroId !== parceiroId)) {
+      return { cpf_cnpj_raw: cpf, associado_id: null, nome: null, ja_tem_cnh: false, ja_tem_rg: false };
+    }
+    const docs = docsPorAssociado.get(associado.id) ?? new Set<string>();
+    return {
+      cpf_cnpj_raw: cpf,
+      associado_id: associado.id,
+      nome: associado.nome,
+      ja_tem_cnh: docs.has('cnh'),
+      ja_tem_rg: docs.has('rg'),
+    };
+  });
+}
+
+async function presignDocumentoUpload(
+  associadoId: string,
+  tipo: TipoDocumento,
+  mimeType: string,
+  parceiroId?: string,
+): Promise<{ uploadUrl: string; key: string; headers?: Record<string, string> }> {
+  if (!TIPOS_DOCUMENTO.includes(tipo)) throw new Error(`Tipo de documento inválido: ${tipo}.`);
+
+  const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
+  if (!associado) throw new Error('Associado não encontrado.');
+  if (parceiroId && associado.parceiroId !== parceiroId) {
+    throw new Error('Este associado não pertence ao seu cadastro.');
+  }
+
+  const key = `documentos/${associado.tenantId}/${associadoId}/${tipo}.${extensaoPorMime(mimeType)}`;
+  const { uploadUrl, headers } = await getStorageProvider().criarUrlUpload({
+    key,
+    contentType: mimeType,
+    expiraEmSegundos: URL_STORAGE_EXPIRA_SEGUNDOS,
+  });
+  return { uploadUrl, key, headers };
+}
+
+async function confirmarDocumentoUpload(data: {
+  associadoId: string;
+  tipo: TipoDocumento;
+  key: string;
+  mimeType: string;
+  nomeArquivo: string;
+  tamanhoBytes?: number;
+  atorUserId: string;
+  parceiroId?: string;
+}): Promise<void> {
+  if (!TIPOS_DOCUMENTO.includes(data.tipo)) throw new Error(`Tipo de documento inválido: ${data.tipo}.`);
+
+  const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, data.associadoId));
+  if (!associado) throw new Error('Associado não encontrado.');
+  if (data.parceiroId && associado.parceiroId !== data.parceiroId) {
+    throw new Error('Este associado não pertence ao seu cadastro.');
+  }
+
+  const providerNome = storageProviderConfigurado() ? 'r2' : 'mock';
+  const now = new Date().toISOString();
+
+  await db()
+    .insert(schema.documentosAssociado)
+    .values({
+      id: novoId('doc'),
+      tenantId: associado.tenantId,
+      associadoId: data.associadoId,
+      tipo: data.tipo,
+      storageKey: data.key,
+      storageProvider: providerNome,
+      mimeType: data.mimeType,
+      nomeArquivo: data.nomeArquivo,
+      tamanhoBytes: data.tamanhoBytes ?? null,
+      enviadoPorUserId: data.atorUserId,
+      enviadoEm: now,
+    })
+    .onConflictDoUpdate({
+      target: [schema.documentosAssociado.associadoId, schema.documentosAssociado.tipo],
+      set: {
+        storageKey: data.key,
+        storageProvider: providerNome,
+        mimeType: data.mimeType,
+        nomeArquivo: data.nomeArquivo,
+        tamanhoBytes: data.tamanhoBytes ?? null,
+        enviadoPorUserId: data.atorUserId,
+        enviadoEm: now,
+      },
+    });
+}
+
+async function getDocumentosStatus(parceiroId?: string): Promise<Record<string, { cnh: boolean; rg: boolean }>> {
+  const associados = parceiroId
+    ? await db().select({ id: schema.associados.id }).from(schema.associados).where(eq(schema.associados.parceiroId, parceiroId))
+    : await db().select({ id: schema.associados.id }).from(schema.associados);
+  const idsValidos = new Set(associados.map((a) => a.id));
+
+  const docs = await db().select().from(schema.documentosAssociado);
+  const status: Record<string, { cnh: boolean; rg: boolean }> = {};
+  for (const d of docs) {
+    if (!idsValidos.has(d.associadoId)) continue;
+    if (!status[d.associadoId]) status[d.associadoId] = { cnh: false, rg: false };
+    if (d.tipo === 'cnh') status[d.associadoId].cnh = true;
+    if (d.tipo === 'rg') status[d.associadoId].rg = true;
+  }
+  return status;
+}
+
+/** Documento sensível — gera link de download temporário e registra quem baixou (I6-adjacente). */
+async function getDocumentoDownloadUrl(
+  associadoId: string,
+  tipo: TipoDocumento,
+  atorUserId: string,
+  parceiroId?: string,
+): Promise<string> {
+  const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
+  if (!associado) throw new Error('Associado não encontrado.');
+  if (parceiroId && associado.parceiroId !== parceiroId) {
+    throw new Error('Este associado não pertence ao seu cadastro.');
+  }
+  const [doc] = await db()
+    .select()
+    .from(schema.documentosAssociado)
+    .where(and(eq(schema.documentosAssociado.associadoId, associadoId), eq(schema.documentosAssociado.tipo, tipo)));
+  if (!doc) throw new Error('Documento não encontrado.');
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: associado.tenantId,
+    atorUserId,
+    acao: 'DOWNLOAD_DOCUMENTO_ASSOCIADO',
+    entidadeTipo: 'documentos_associado',
+    entidadeId: doc.id,
+    depois: { tipo, associado_id: associadoId },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Portal',
+    ocorridoEm: new Date().toISOString(),
+  });
+
+  return getStorageProvider().criarUrlDownload(doc.storageKey, URL_STORAGE_EXPIRA_SEGUNDOS);
+}
+
 export const serverStore = {
   getSession,
   setRole,
@@ -1254,4 +1440,9 @@ export const serverStore = {
   getAutomacoesConfig,
   setAutomacaoConfig,
   getNotificacoesLog,
+  previewDocumentos,
+  presignDocumentoUpload,
+  confirmarDocumentoUpload,
+  getDocumentosStatus,
+  getDocumentoDownloadUrl,
 };

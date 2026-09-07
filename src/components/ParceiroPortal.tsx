@@ -34,6 +34,7 @@ import {
 import { CadastrarNomeModal } from './partner/CadastrarNomeModal.js';
 import { ImportarListaModal } from './partner/ImportarListaModal.js';
 import { EnviarListaModal } from './partner/EnviarListaModal.js';
+import { AnexarDocumentosModal } from './partner/AnexarDocumentosModal.js';
 import { PixPagamentoModal } from './partner/PixPagamentoModal.js';
 import { MinhasListasView } from './partner/MinhasListasView.js';
 import { HomeView } from './partner/HomeView.js';
@@ -87,6 +88,19 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   const [showCadastrarModal, setShowCadastrarModal] = useState(false);
   const [showImportarModal, setShowImportarModal] = useState(false);
   const [showEnviarModal, setShowEnviarModal] = useState(false);
+  const [showDocumentosModal, setShowDocumentosModal] = useState(false);
+  const [documentosStatus, setDocumentosStatus] = useState<Record<string, { cnh: boolean; rg: boolean }>>({});
+
+  const loadDocumentosStatus = () => {
+    fetch('/api/documentos/status')
+      .then((res) => (res.ok ? res.json() : {}))
+      .then(setDocumentosStatus)
+      .catch(() => setDocumentosStatus({}));
+  };
+
+  useEffect(() => {
+    loadDocumentosStatus();
+  }, []);
   const [showPixModal, setShowPixModal] = useState(false);
   const [activeSubmissao, setActiveSubmissao] = useState<SubmissaoData | null>(null);
   const [activePixPayload, setActivePixPayload] = useState<string | undefined>(undefined);
@@ -888,6 +902,15 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
 
           <button
             type="button"
+            onClick={() => setShowDocumentosModal(true)}
+            className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Anexar Documentos
+          </button>
+
+          <button
+            type="button"
             onClick={() => setShowEnviarModal(true)}
             className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
           >
@@ -1070,6 +1093,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
                 <th className="px-4 py-3">Nome / Razão Social</th>
                 <th className="px-4 py-3">CPF / CNPJ</th>
                 <th className="px-4 py-3">Pagamento</th>
+                <th className="px-4 py-3">Docs</th>
                 <th className="px-4 py-3">Preço Unitário</th>
                 <th className="px-4 py-3">Origem</th>
                 <th className="px-4 py-3 text-right">Ações</th>
@@ -1078,7 +1102,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {filteredRegistros.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
+                  <td colSpan={9} className="px-6 py-10 text-center text-slate-400">
                     Nenhum registro encontrado para a busca especificada.
                   </td>
                 </tr>
@@ -1116,6 +1140,25 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
 
                       <td className="px-4 py-3 whitespace-nowrap">
                         {paymentStatusBadge(reg.process_status)}
+                      </td>
+
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {(() => {
+                          const status = documentosStatus[reg.associado_id];
+                          const completo = status?.cnh && status?.rg;
+                          return (
+                            <span
+                              title={completo ? 'CNH e RG anexados' : 'Falta CNH e/ou RG'}
+                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${
+                                completo
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : 'bg-slate-100 text-slate-400 border-slate-200'
+                              }`}
+                            >
+                              {status?.cnh ? 'CNH' : '—'} / {status?.rg ? 'RG' : '—'}
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       <td className="px-4 py-3 font-bold text-slate-800 whitespace-nowrap">
@@ -1203,6 +1246,12 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
           (selectedIds.length > 0 ? selectedIds.length : pendentesCount || totalNomes) * precoUnitario
         )}
         onConfirm={handleConfirmEnvio}
+      />
+
+      <AnexarDocumentosModal
+        isOpen={showDocumentosModal}
+        onClose={() => setShowDocumentosModal(false)}
+        onConcluido={loadDocumentosStatus}
       />
 
       {activeSubmissao && (
