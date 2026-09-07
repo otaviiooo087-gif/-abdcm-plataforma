@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Registro, Lote } from '../../domain/types.js';
 import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
-import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { Download, Search, Calendar, Eye, EyeOff, FileText, ExternalLink, X } from 'lucide-react';
 
 interface ListaEnviada {
@@ -264,9 +263,16 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
                     <Calendar className="w-3 h-3 shrink-0" />
                     <span className="truncate">{formattedDate}</span>
                   </span>
-                  <span className="font-semibold text-slate-600 shrink-0">
-                    {sub.nomes_count} nome(s) · {formatCurrencyBRL(sub.valor_total)}
-                  </span>
+                  <span className="font-semibold text-slate-600 shrink-0">{sub.nomes_count} nome(s)</span>
+                </div>
+
+                <div className="grid grid-cols-5 gap-1 text-center pt-1">
+                  {ORGAOS.map((orgao) => (
+                    <div key={orgao} className="flex flex-col items-center gap-1">
+                      {getBureauPill(fase === 'fase2' || fase === 'concluida')}
+                      <span className="text-[8px] text-slate-400 leading-tight">{orgao}</span>
+                    </div>
+                  ))}
                 </div>
 
                 <button
@@ -289,7 +295,6 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
                       </p>
                     ) : (
                       nomesDaLista.map((reg) => {
-                        const baixado = reg.process_status === 'baixado';
                         const docsAbertos = docsAbertoParaRegistro === reg.id;
                         const statusDocs = documentosStatus[reg.associado_id];
                         const esperados = documentosEsperados(reg.tipo_documento);
@@ -317,15 +322,6 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
                                   <Eye className="w-3.5 h-3.5" />
                                 </button>
                               </div>
-                            </div>
-
-                            <div className="mt-2 grid grid-cols-5 gap-1 text-center">
-                              {ORGAOS.map((orgao) => (
-                                <div key={orgao} className="flex flex-col items-center gap-1">
-                                  {getBureauPill(baixado)}
-                                  <span className="text-[8px] text-slate-400 leading-tight">{orgao}</span>
-                                </div>
-                              ))}
                             </div>
 
                             {docsAbertos && (
