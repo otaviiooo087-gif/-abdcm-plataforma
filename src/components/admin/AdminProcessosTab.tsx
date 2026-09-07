@@ -26,6 +26,7 @@ import {
   Pencil,
   Save,
   X,
+  Plus,
 } from 'lucide-react';
 
 interface AdminProcessosTabProps {
@@ -65,6 +66,85 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
   const [prazoInput, setPrazoInput] = useState('');
   const [isSavingPrazo, setIsSavingPrazo] = useState(false);
   const [prazoError, setPrazoError] = useState<string | null>(null);
+
+  // Criação de uma nova Ação Coletiva (lote)
+  const ORGAOS_DISPONIVEIS = ['Serasa Experian', 'SPC Brasil', 'Boa Vista SCPC', 'Cenprot BR', 'Cenprot SP'];
+  const [showNovaAcaoModal, setShowNovaAcaoModal] = useState(false);
+  const [novaAcaoNome, setNovaAcaoNome] = useState('');
+  const [novaAcaoCodigo, setNovaAcaoCodigo] = useState('');
+  const [novaAcaoNumeroProcesso, setNovaAcaoNumeroProcesso] = useState('');
+  const [novaAcaoAbreEm, setNovaAcaoAbreEm] = useState('');
+  const [novaAcaoClosesAt, setNovaAcaoClosesAt] = useState('');
+  const [novaAcaoPrecoPorNome, setNovaAcaoPrecoPorNome] = useState('');
+  const [novaAcaoBureaus, setNovaAcaoBureaus] = useState<string[]>(ORGAOS_DISPONIVEIS);
+  const [isCreatingAcao, setIsCreatingAcao] = useState(false);
+  const [novaAcaoError, setNovaAcaoError] = useState<string | null>(null);
+
+  const protocoloAutoPreview = new Date().toISOString().slice(0, 10);
+
+  const toggleNovaAcaoBureau = (bureau: string) => {
+    setNovaAcaoBureaus((prev) =>
+      prev.includes(bureau) ? prev.filter((b) => b !== bureau) : [...prev, bureau],
+    );
+  };
+
+  const handleFecharNovaAcaoModal = () => {
+    setShowNovaAcaoModal(false);
+    setNovaAcaoError(null);
+    setNovaAcaoNome('');
+    setNovaAcaoCodigo('');
+    setNovaAcaoNumeroProcesso('');
+    setNovaAcaoAbreEm('');
+    setNovaAcaoClosesAt('');
+    setNovaAcaoPrecoPorNome('');
+    setNovaAcaoBureaus(ORGAOS_DISPONIVEIS);
+  };
+
+  const handleCriarNovaAcao = async () => {
+    if (!novaAcaoNome.trim() || !novaAcaoCodigo.trim()) {
+      setNovaAcaoError('Nome da Ação Coletiva e código do lote são obrigatórios.');
+      return;
+    }
+    if (!novaAcaoAbreEm || !novaAcaoClosesAt) {
+      setNovaAcaoError('Informe a data de início e a data de encerramento.');
+      return;
+    }
+    const precoReais = parseFloat(novaAcaoPrecoPorNome.replace(',', '.'));
+    if (!precoReais || precoReais <= 0) {
+      setNovaAcaoError('Informe o preço por nome.');
+      return;
+    }
+    if (novaAcaoBureaus.length === 0) {
+      setNovaAcaoError('Selecione ao menos um órgão de proteção ao crédito.');
+      return;
+    }
+
+    setIsCreatingAcao(true);
+    setNovaAcaoError(null);
+    try {
+      const res = await fetch('/api/lotes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: novaAcaoNome.trim(),
+          codigo: novaAcaoCodigo.trim(),
+          numeroProcesso: novaAcaoNumeroProcesso.trim() || null,
+          abreEm: new Date(novaAcaoAbreEm).toISOString(),
+          closesAt: new Date(novaAcaoClosesAt).toISOString(),
+          precoPorNome: Math.round(precoReais * 100),
+          bureaus: novaAcaoBureaus,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Erro ao criar Ação Coletiva.');
+      handleFecharNovaAcaoModal();
+      onRefreshData();
+    } catch (err) {
+      setNovaAcaoError(err instanceof Error ? err.message : 'Erro ao criar Ação Coletiva.');
+    } finally {
+      setIsCreatingAcao(false);
+    }
+  };
 
   const handleCopyProcesso = (num: string) => {
     navigator.clipboard.writeText(num);
@@ -271,6 +351,14 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
             >
               <FileSpreadsheet className="w-4 h-4" />
               Lançar Andamento Judicial
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowNovaAcaoModal(true)}
+              className="px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Nova Ação Coletiva
             </button>
           </div>
         </div>
@@ -950,6 +1038,176 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                 className="px-4 py-1.5 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer"
               >
                 Registrar Andamento
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Nova Ação Coletiva */}
+      {showNovaAcaoModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl border border-slate-200 max-w-lg w-full p-6 shadow-xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-[#148296]" />
+                Nova Ação Coletiva
+              </h3>
+              <button
+                type="button"
+                onClick={handleFecharNovaAcaoModal}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600">
+              Cadastra um novo lote global para os parceiros contribuírem com associados.
+            </p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Nome da Ação Coletiva
+                </label>
+                <input
+                  type="text"
+                  value={novaAcaoNome}
+                  onChange={(e) => setNovaAcaoNome(e.target.value)}
+                  placeholder="Ex: AÇÃO COLETIVA 125"
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Código do Lote
+                  </label>
+                  <input
+                    type="text"
+                    value={novaAcaoCodigo}
+                    onChange={(e) => setNovaAcaoCodigo(e.target.value)}
+                    placeholder="Ex: AC 125"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Protocolo (automático)
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={protocoloAutoPreview}
+                    title="Gerado automaticamente pelo servidor no momento da criação — AAAA-MM-DD"
+                    className="w-full px-3 py-2 text-xs bg-slate-100 border border-slate-200 rounded-lg outline-none text-slate-500 font-mono cursor-not-allowed"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Número do Processo
+                </label>
+                <input
+                  type="text"
+                  value={novaAcaoNumeroProcesso}
+                  onChange={(e) => setNovaAcaoNumeroProcesso(e.target.value)}
+                  placeholder="Opcional — preenchido quando disponível"
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800 font-mono"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Data de Início
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={novaAcaoAbreEm}
+                    onChange={(e) => setNovaAcaoAbreEm(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Data de Encerramento
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={novaAcaoClosesAt}
+                    onChange={(e) => setNovaAcaoClosesAt(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Preço por Nome (R$)
+                </label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={novaAcaoPrecoPorNome}
+                  onChange={(e) => setNovaAcaoPrecoPorNome(e.target.value)}
+                  placeholder="Ex: 250,00"
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Órgãos de Proteção ao Crédito
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {ORGAOS_DISPONIVEIS.map((bureau) => (
+                    <label
+                      key={bureau}
+                      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition-colors ${
+                        novaAcaoBureaus.includes(bureau)
+                          ? 'bg-[#148296]/10 border-[#148296]/40 text-[#148296]'
+                          : 'bg-slate-50 border-slate-200 text-slate-500'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={novaAcaoBureaus.includes(bureau)}
+                        onChange={() => toggleNovaAcaoBureau(bureau)}
+                        className="rounded border-slate-300 text-[#148296] focus:ring-[#148296] cursor-pointer"
+                      />
+                      {bureau}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {novaAcaoError && (
+                <div className="flex items-center gap-2 text-left bg-rose-50 text-rose-700 p-3 rounded-xl border border-rose-200 text-xs">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{novaAcaoError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={handleFecharNovaAcaoModal}
+                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleCriarNovaAcao}
+                disabled={isCreatingAcao}
+                className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isCreatingAcao ? 'Criando...' : 'Criar Ação Coletiva'}
               </button>
             </div>
           </div>

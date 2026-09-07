@@ -940,6 +940,73 @@ async function updateLote(
   return loteDeLinha({ ...atual, ...patch });
 }
 
+/** Cria uma nova Ação Coletiva (lote) — só a equipe ABDCM cria (I1/I9).
+ * O protocolo (referencia_protocolo) é sempre AAAA-MM-DD da data de
+ * criação, gerado aqui no servidor e nunca aceito do cliente. Se já existir
+ * um lote 'aberto', a nova ação nasce como 'rascunho' — pra não ter dois
+ * lotes vigentes ao mesmo tempo — e o admin decide depois quando abrir
+ * esta e encerrar a anterior. */
+async function createLote(
+  atorUserId: string,
+  campos: {
+    nome: string;
+    codigo?: string | null;
+    numeroProcesso?: string | null;
+    abreEm: string;
+    closesAt: string;
+    precoPorNome: number;
+    bureaus: string[];
+  },
+): Promise<Lote> {
+  const existentes = await db().select().from(schema.lotes);
+  const numeroSequencial = existentes.reduce((max, l) => Math.max(max, l.numeroSequencial), 0) + 1;
+  const jaTemLoteAberto = existentes.some((l) => l.status === 'aberto');
+
+  const agora = new Date().toISOString();
+  const deadlineTime = campos.closesAt.slice(11, 19) || '23:59:59';
+
+  const linha: LoteRow = {
+    id: novoId('lote'),
+    tenantId: ABDCM_TENANT_ID,
+    nome: campos.nome,
+    codigo: campos.codigo || null,
+    numeroSequencial,
+    status: jaTemLoteAberto ? 'rascunho' : 'aberto',
+    abreEm: campos.abreEm,
+    closesAt: campos.closesAt,
+    deadlineTime,
+    precoPorNome: campos.precoPorNome,
+    bureaus: campos.bureaus,
+    referenciaProtocolo: agora.slice(0, 10),
+    numeroProcesso: campos.numeroProcesso || null,
+    varaTribunal: null,
+    juiz: null,
+    dataProtocolo: null,
+    dataDistribuicao: null,
+    liminarStatus: null,
+    concluidoEm: null,
+    createdAt: agora,
+  };
+
+  await db().insert(schema.lotes).values(linha);
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: ABDCM_TENANT_ID,
+    atorUserId,
+    acao: 'LOTE_CRIADO',
+    entidadeTipo: 'lotes',
+    entidadeId: linha.id,
+    antes: null,
+    depois: { nome: linha.nome, codigo: linha.codigo, status: linha.status },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: agora,
+  });
+
+  return loteDeLinha(linha);
+}
+
 // ---------------------------------------------------------------------
 // Contestações ("Reclame Aqui")
 // ---------------------------------------------------------------------
@@ -1434,6 +1501,7 @@ export const serverStore = {
   transitionStatus,
   revealDocument,
   updateLote,
+  createLote,
   attachComprovante,
   getContestacoes,
   createContestacao,
