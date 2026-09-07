@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Lote, Registro } from '../../domain/types.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { UserSession } from '../../server/mockData.js';
+import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
 import {
   Layers,
   Search,
@@ -12,6 +13,7 @@ import {
   FileSpreadsheet,
   Download,
   ArrowRightLeft,
+  ArrowLeft,
   Eye,
   Lock,
   Clock,
@@ -86,8 +88,57 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
 
   const protocoloAutoPreview = new Date().toISOString().slice(0, 10);
 
-  // "Ver nomes" dentro do card de cada Ação Coletiva
-  const [expandedLoteId, setExpandedLoteId] = useState<string | null>(null);
+  // "Detalhes": abre a página detalhada da Ação Coletiva (todos os nomes,
+  // documentação anexada por associado e botão pra baixar a lista)
+  const [detalhesLoteId, setDetalhesLoteId] = useState<string | null>(null);
+  const [documentosStatus, setDocumentosStatus] = useState<Record<string, StatusDocumentos>>({});
+  const [docsAbertoParaRegistro, setDocsAbertoParaRegistro] = useState<string | null>(null);
+  const [baixandoDoc, setBaixandoDoc] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/documentos/status')
+      .then((res) => (res.ok ? res.json() : {}))
+      .then(setDocumentosStatus)
+      .catch(() => setDocumentosStatus({}));
+  }, []);
+
+  const handleAbrirDocumento = async (associadoId: string, tipo: keyof StatusDocumentos) => {
+    const chave = `${associadoId}:${tipo}`;
+    setBaixandoDoc(chave);
+    try {
+      const res = await fetch(`/api/associados/${associadoId}/documentos/${tipo}/download`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Documento não encontrado.');
+      window.open(data.url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao abrir documento.');
+    } finally {
+      setBaixandoDoc(null);
+    }
+  };
+
+  const handleExportListaLote = (loteId: string) => {
+    const lote = lotes.find((l) => l.id === loteId);
+    const registrosDoLote = registros.filter((r) => r.lote_id === loteId);
+
+    const headers = ['Protocolo', 'Nome / Razão Social', 'CPF/CNPJ', 'Status Processual', 'Valor Centavos'];
+    const rows = registrosDoLote.map((reg) => [
+      reg.protocol_code || '',
+      reg.nome,
+      unmaskedDocs[reg.id] || reg.cpf_cnpj,
+      reg.process_status,
+      reg.unit_price,
+    ]);
+
+    const csvContent =
+      'data:text/csv;charset=utf-8,﻿' + [headers.join(';'), ...rows.map((e) => e.join(';'))].join('\n');
+    const link = document.createElement('a');
+    link.setAttribute('href', encodeURI(csvContent));
+    link.setAttribute('download', `${lote?.codigo || lote?.nome || 'acao_coletiva'}_nomes.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Encerrar Ação Coletiva: bloqueia captação, gera o pacote (planilha +
   // documentos, em ZIP) e avisa a equipe ABDCM no WhatsApp
@@ -355,6 +406,151 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
     document.body.removeChild(link);
   };
 
+  // ==========================================
+  // PÁGINA DETALHADA DE UMA AÇÃO COLETIVA (aberta pelo botão "Detalhes" do card)
+  // ==========================================
+  if (detalhesLoteId) {
+    const lote = lotes.find((l) => l.id === detalhesLoteId);
+    const registrosDoLote = registros.filter((r) => r.lote_id === detalhesLoteId);
+    const completos = registrosDoLote.filter((r) => {
+      const status = documentosStatus[r.associado_id];
+      const esperados = documentosEsperados(r.tipo_documento);
+      return esperados.every((d) => status?.[d.tipo]);
+    }).length;
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setDetalhesLoteId(null);
+              setDocsAbertoParaRegistro(null);
+            }}
+            className="flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Voltar para Ações Coletivas
+          </button>
+          <button
+            type="button"
+            onClick={() => handleExportListaLote(detalhesLoteId)}
+            className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            Baixar Arquivo (CSV)
+          </button>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
+              {lote?.codigo || 'Ação Coletiva'}
+            </span>
+            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-[#148296]/10 text-[#148296] border border-[#148296]/20">
+              {lote?.status || '—'}
+            </span>
+          </div>
+          <h2 className="text-lg font-bold text-slate-900 mt-1">{lote?.nome}</h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Protocolo: <span className="font-mono">{lote?.referencia_protocolo || '—'}</span>
+            {lote?.numero_processo && (
+              <>
+                {' '}
+                · Processo: <span className="font-mono">{lote.numero_processo}</span>
+              </>
+            )}
+          </p>
+
+          <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-center">
+              <p className="text-xl font-black text-slate-900">{registrosDoLote.length}</p>
+              <p className="text-[10px] text-slate-500 uppercase font-bold mt-0.5">Nomes na lista</p>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-center">
+              <p className="text-xl font-black text-emerald-700">{completos}</p>
+              <p className="text-[10px] text-emerald-600 uppercase font-bold mt-0.5">Documentação completa</p>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-center">
+              <p className="text-xl font-black text-amber-700">{registrosDoLote.length - completos}</p>
+              <p className="text-[10px] text-amber-600 uppercase font-bold mt-0.5">Documentação pendente</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100">
+            <h3 className="text-sm font-bold text-slate-900">Nomes desta Ação Coletiva</h3>
+          </div>
+          {registrosDoLote.length === 0 ? (
+            <p className="px-6 py-10 text-center text-xs text-slate-400">Nenhum nome nesta ação ainda.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {registrosDoLote.map((reg) => {
+                const status = documentosStatus[reg.associado_id];
+                const esperados = documentosEsperados(reg.tipo_documento);
+                const docsAbertos = docsAbertoParaRegistro === reg.id;
+
+                return (
+                  <div key={reg.id} className="px-6 py-3.5">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900 truncate">{reg.nome}</p>
+                        <p className="text-[11px] font-mono text-slate-500">
+                          {unmaskedDocs[reg.id] || reg.cpf_cnpj} · {reg.protocol_code || '—'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <StatusBadge status={reg.process_status} />
+                        <button
+                          type="button"
+                          onClick={() => setDocsAbertoParaRegistro(docsAbertos ? null : reg.id)}
+                          title="Ver documentos anexados"
+                          className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
+                            docsAbertos
+                              ? 'bg-[#148296]/10 text-[#148296]'
+                              : 'text-slate-400 hover:text-[#148296] hover:bg-[#148296]/10'
+                          }`}
+                        >
+                          {docsAbertos ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {docsAbertos && (
+                      <div className="mt-2.5 pt-2.5 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                        {esperados.map((doc) => {
+                          const disponivel = Boolean(status?.[doc.tipo]);
+                          const chave = `${reg.associado_id}:${doc.tipo}`;
+                          return (
+                            <button
+                              key={doc.tipo}
+                              type="button"
+                              disabled={!disponivel || baixandoDoc === chave}
+                              onClick={() => handleAbrirDocumento(reg.associado_id, doc.tipo)}
+                              className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11px] font-semibold cursor-pointer transition-colors ${
+                                disponivel
+                                  ? 'bg-white border border-[#148296]/30 text-[#148296] hover:bg-[#148296]/5'
+                                  : 'bg-slate-50 border border-slate-200 text-slate-300 cursor-not-allowed'
+                              }`}
+                            >
+                              <span>{doc.label}</span>
+                              {disponivel ? <ExternalLink className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* 1. Header Institucional da Aba Processos */}
@@ -584,36 +780,18 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                   </div>
                 </div>
 
-                {/* Sub-aba: nomes inseridos nesta Ação Coletiva */}
+                {/* Abre a página detalhada desta Ação Coletiva */}
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setExpandedLoteId(expandedLoteId === lote.id ? null : lote.id);
+                    setDetalhesLoteId(lote.id);
                   }}
                   className="mt-2 w-full pt-2 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] font-bold text-[#148296] hover:text-[#0f6b7c] cursor-pointer"
                 >
-                  {expandedLoteId === lote.id ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  {expandedLoteId === lote.id ? 'Ocultar nomes' : `Ver nomes (${loteRegistros.length})`}
+                  <FileText className="w-3.5 h-3.5" />
+                  {`Detalhes (${loteRegistros.length})`}
                 </button>
-
-                {expandedLoteId === lote.id && (
-                  <div onClick={(e) => e.stopPropagation()} className="mt-2 max-h-40 overflow-y-auto space-y-1 -mx-1 px-1">
-                    {loteRegistros.length === 0 ? (
-                      <p className="text-[11px] text-slate-400 text-center py-2">Nenhum nome nesta ação ainda.</p>
-                    ) : (
-                      loteRegistros.map((r) => (
-                        <div
-                          key={r.id}
-                          className="flex items-center justify-between gap-2 bg-slate-50 rounded-lg px-2 py-1.5 text-[11px]"
-                        >
-                          <span className="truncate font-semibold text-slate-700">{r.nome}</span>
-                          <span className="shrink-0 font-mono text-slate-400">{r.protocol_code || '—'}</span>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
               </div>
             );
           })}
