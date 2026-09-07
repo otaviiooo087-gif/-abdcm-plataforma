@@ -979,74 +979,108 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         </div>
       </div>
 
-      {/* 2. Stepper do Processo (4 Passos do Fluxo Limpa Nome) */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-center">
-          {/* Passo 1 */}
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-[#148296] text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-xs">
-              1
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">1. Cadastrar Nomes</p>
-              <p className="text-[11px] text-slate-500">Insira nomes ou importe lista</p>
-            </div>
-          </div>
+      {/* 2. Stepper do Processo (4 Passos do Fluxo Limpa Nome) — cinza até o
+          passo ser alcançado, vira verde (com animação) assim que o parceiro
+          completa cada etapa; a linha entre os passos acompanha o progresso. */}
+      {(() => {
+        const algumEnviado = registros.some((r) => r.process_status !== 'pendente');
+        const algumPago = registros.some((r) =>
+          ['pago', 'aguardando_protocolo', 'protocolado', 'baixado'].includes(r.process_status),
+        );
+        const passos = [
+          {
+            numero: 1,
+            titulo: 'Cadastrar Nomes',
+            subtitulo: 'Insira nomes ou importe lista',
+            concluido: registros.length > 0,
+            emAndamento: registros.length === 0,
+          },
+          {
+            numero: 2,
+            titulo: 'Enviar Lista',
+            subtitulo: 'Confirme o envio da lista ativa',
+            concluido: algumEnviado,
+            emAndamento: !algumEnviado && registros.length > 0,
+          },
+          {
+            numero: 3,
+            titulo: 'Pagamento PIX',
+            subtitulo: 'Pague via PIX instantâneo',
+            concluido: algumPago,
+            emAndamento: !algumPago && Boolean(pendingSubmissao),
+          },
+          {
+            numero: 4,
+            titulo: 'Processamento',
+            subtitulo: 'Acompanhe protocolo e baixa',
+            concluido: baixadosCount > 0,
+            emAndamento: false,
+          },
+        ];
 
-          {/* Passo 2 */}
-          <div className="flex items-center gap-3">
-            <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${
-                enviadosCount > 0 || pagosCount > 0
-                  ? 'bg-[#148296] text-white'
-                  : 'bg-slate-100 text-slate-500 border border-slate-200'
+        const stepCircle = (passo: (typeof passos)[number]) => (
+          <div
+            className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 shadow-xs transition-all duration-500 ${
+              passo.concluido
+                ? 'bg-emerald-600 text-white scale-105'
+                : passo.emAndamento
+                ? 'bg-[#148296] text-white animate-pulse'
+                : 'bg-slate-100 text-slate-500 border border-slate-200'
+            }`}
+          >
+            {passo.concluido ? <Check className="w-4 h-4" /> : passo.numero}
+          </div>
+        );
+
+        const stepLabel = (passo: (typeof passos)[number]) => (
+          <div>
+            <p
+              className={`text-xs font-bold transition-colors duration-500 ${
+                passo.concluido ? 'text-emerald-700' : 'text-slate-900'
               }`}
             >
-              2
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">2. Enviar Lista</p>
-              <p className="text-[11px] text-slate-500">Confirme o envio da lista ativa</p>
-            </div>
+              {passo.numero}. {passo.titulo}
+            </p>
+            <p className="text-[11px] text-slate-500">{passo.subtitulo}</p>
           </div>
+        );
 
-          {/* Passo 3 */}
-          <div className="flex items-center gap-3">
-            <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${
-                pagosCount > 0
-                  ? 'bg-emerald-600 text-white'
-                  : pendingSubmissao
-                  ? 'bg-amber-500 text-white animate-pulse'
-                  : 'bg-slate-100 text-slate-500 border border-slate-200'
-              }`}
-            >
-              3
+        return (
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5">
+            {/* Telas menores: grade simples, sem linha de conexão */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:hidden gap-4 items-center">
+              {passos.map((passo) => (
+                <div key={passo.numero} className="flex items-center gap-3">
+                  {stepCircle(passo)}
+                  {stepLabel(passo)}
+                </div>
+              ))}
             </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">3. Pagamento PIX</p>
-              <p className="text-[11px] text-slate-500">Pague via PIX instantâneo</p>
-            </div>
-          </div>
 
-          {/* Passo 4 */}
-          <div className="flex items-center gap-3">
-            <div
-              className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${
-                baixadosCount > 0
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-slate-100 text-slate-500 border border-slate-200'
-              }`}
-            >
-              4
-            </div>
-            <div>
-              <p className="text-xs font-bold text-slate-900">4. Processamento</p>
-              <p className="text-[11px] text-slate-500">Acompanhe protocolo e baixa</p>
+            {/* Telas grandes: os 4 passos em linha, com a barra de progresso
+                entre eles acompanhando o avanço */}
+            <div className="hidden lg:flex items-start">
+              {passos.map((passo, idx) => (
+                <React.Fragment key={passo.numero}>
+                  <div className="flex items-center gap-3">
+                    {stepCircle(passo)}
+                    {stepLabel(passo)}
+                  </div>
+                  {idx < passos.length - 1 && (
+                    <div className="flex-1 h-1 mx-3 mt-[18px] rounded-full bg-slate-200 overflow-hidden">
+                      <div
+                        className={`h-full bg-emerald-500 rounded-full transition-all duration-700 ease-out ${
+                          passo.concluido ? 'w-full' : 'w-0'
+                        }`}
+                      />
+                    </div>
+                  )}
+                </React.Fragment>
+              ))}
             </div>
           </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* 3. Aviso de Pagamento Pendente (se houver submissão aguardando PIX) */}
       {pendingSubmissao && (
