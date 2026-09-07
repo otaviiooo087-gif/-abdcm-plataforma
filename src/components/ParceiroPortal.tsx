@@ -361,7 +361,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   }
 
   if (parceiroTab === 'minhas-listas') {
-    return <MinhasListasView registros={registros} lotes={lotes} />;
+    return <MinhasListasView registros={registros} lotes={lotes} submissoes={submissoes} />;
   }
 
   if (parceiroTab === 'financeiro') {
