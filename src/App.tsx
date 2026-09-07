@@ -83,6 +83,20 @@ export default function App() {
     }
   };
 
+  // A troca de superfície (Portal do Parceiro / Console Admin / Consulta
+  // Pública) é só navegação de tela — não muda o papel da sessão sozinha.
+  // Sem isso, entrar no Console Admin com o papel ainda em "parceiro" (o
+  // padrão) faz toda ação administrativa (ex.: criar Ação Coletiva) ser
+  // barrada pelo servidor com 403, o que parece bug e não é: o seletor
+  // "Papel" no header existe justamente pra escolher entre os papéis da
+  // equipe ABDCM ao testar o Console Admin.
+  const handleSelectSurface = (surface: 'parceiro' | 'admin' | 'publico') => {
+    setCurrentSurface(surface);
+    if (surface === 'admin' && session?.role === 'parceiro') {
+      handleSwitchRole('administrador');
+    }
+  };
+
   // Filtragem de busca
   const filteredRegistros = registros.filter((r) => {
     if (!searchQuery.trim()) return true;
@@ -99,7 +113,7 @@ export default function App() {
       {/* 1. Sidebar com Tema Professional Polish */}
       <Sidebar
         currentSurface={currentSurface}
-        onSelectSurface={setCurrentSurface}
+        onSelectSurface={handleSelectSurface}
         adminTab={adminTab}
         onSelectAdminTab={setAdminTab}
         parceiroTab={parceiroTab}
@@ -111,7 +125,7 @@ export default function App() {
       <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         <Header
           currentSurface={currentSurface}
-          onSwitchSurface={setCurrentSurface}
+          onSwitchSurface={handleSelectSurface}
           session={session}
           onSwitchRole={handleSwitchRole}
           searchQuery={searchQuery}
