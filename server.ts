@@ -236,7 +236,8 @@ async function startServer() {
     try {
       const { id } = req.params;
       const session = serverStore.getSession();
-      await serverStore.cancelSubmissao(id, session.id);
+      const atorTipo = session.role === 'parceiro' ? 'parceiro' : 'admin';
+      await serverStore.cancelSubmissao(id, session.id, atorTipo);
       res.json({ success: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao cancelar submissão';

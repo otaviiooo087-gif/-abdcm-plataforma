@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Lote, Registro, Associado, Contestacao, Servico, Contrato } from '../domain/types.js';
-import { StatusBadge } from './StatusBadge.js';
 import { formatCurrencyBRL } from '../lib/money/index.js';
 import {
   UserPlus,
@@ -287,9 +286,13 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
       const res = await fetch(`/api/registros/${id}`, { method: 'DELETE' });
       if (res.ok) {
         onRefreshData?.();
+      } else {
+        const data = await res.json().catch(() => null);
+        alert(data?.error || 'Não foi possível excluir este registro.');
       }
     } catch (err) {
       console.error(err);
+      alert('Erro de conexão ao excluir registro.');
     }
   };
 
@@ -335,9 +338,13 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         setShowPixModal(false);
         loadSubmissoes();
         onRefreshData?.();
+      } else {
+        const data = await res.json().catch(() => null);
+        alert(data?.error || 'Não foi possível cancelar esta submissão.');
       }
     } catch (err) {
       console.error(err);
+      alert('Erro de conexão ao cancelar submissão.');
     }
   };
 
@@ -825,6 +832,26 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   // ==========================================
   const pendingSubmissao = submissoes.find((s) => s.payment_status === 'pendente');
 
+  // Nesta tela o status que importa pro parceiro é o do PAGAMENTO da lista,
+  // não a fase jurídica do processo (isso fica na aba Minhas Listas/Processos).
+  const paymentStatusBadge = (status: Registro['process_status']) => {
+    const map: Record<string, { label: string; classes: string }> = {
+      pendente: { label: 'Não Enviado', classes: 'bg-slate-100 text-slate-600 border-slate-200' },
+      enviado: { label: 'Pendente de Pagamento', classes: 'bg-amber-50 text-amber-700 border-amber-200' },
+      aguardando_pagamento: { label: 'Pendente de Pagamento', classes: 'bg-amber-50 text-amber-700 border-amber-200' },
+      reprovado: { label: 'Cancelada por Falta de Pagamento', classes: 'bg-rose-50 text-rose-700 border-rose-200' },
+      cancelado: { label: 'Cancelada', classes: 'bg-zinc-100 text-zinc-600 border-zinc-300' },
+    };
+    const config = map[status] ?? { label: 'Aprovado', classes: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+    return (
+      <span
+        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${config.classes}`}
+      >
+        {config.label}
+      </span>
+    );
+  };
+
   return (
     <div className="p-8 space-y-6 overflow-y-auto flex-1 relative">
       {/* 1. Top Header com Título e Botões de Ação */}
@@ -996,11 +1023,11 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
             onChange={(e) => setStatusFilter(e.target.value)}
             className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#148296]/30 focus:border-[#148296] outline-none text-slate-700 font-medium cursor-pointer"
           >
-            <option value="todos">Todos os status</option>
-            <option value="pendente">Pendente ({pendentesCount})</option>
-            <option value="enviado">Enviado ({enviadosCount})</option>
-            <option value="pago">Pago ({pagosCount})</option>
-            <option value="baixado">Baixado ({baixadosCount})</option>
+            <option value="todos">Todos os pagamentos</option>
+            <option value="pendente">Não Enviado ({pendentesCount})</option>
+            <option value="enviado">Pendente de Pagamento ({enviadosCount})</option>
+            <option value="pago">Aprovado ({pagosCount})</option>
+            <option value="baixado">Aprovado — Baixado ({baixadosCount})</option>
           </select>
         </div>
 
@@ -1041,7 +1068,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
                 <th className="px-4 py-3">Protocolo</th>
                 <th className="px-4 py-3">Nome / Razão Social</th>
                 <th className="px-4 py-3">CPF / CNPJ</th>
-                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Pagamento</th>
                 <th className="px-4 py-3">Preço Unitário</th>
                 <th className="px-4 py-3">Origem</th>
                 <th className="px-4 py-3 text-right">Ações</th>
@@ -1087,7 +1114,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <StatusBadge status={reg.process_status} />
+                        {paymentStatusBadge(reg.process_status)}
                       </td>
 
                       <td className="px-4 py-3 font-bold text-slate-800 whitespace-nowrap">
