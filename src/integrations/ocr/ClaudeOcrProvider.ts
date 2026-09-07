@@ -11,16 +11,21 @@ const MIME_TYPES_SUPORTADOS = new Set(['image/jpeg', 'image/png', 'image/webp', 
 const DocumentoSchema = z.object({
   nome: z.string().nullable(),
   cpf: z.string().nullable(),
+  tipoDocumento: z.enum(['cnh', 'rg']).nullable(),
   confianca: z.enum(['alta', 'baixa']),
 });
 
+const DOCUMENTO_VAZIO: DocumentoLido = { nome: null, cpf: null, tipoDocumento: null, confianca: 'baixa' };
+
 const PROMPT_EXTRACAO =
-  'Esta imagem é uma CNH (Carteira Nacional de Habilitação) ou um RG brasileiro. ' +
-  'Extraia o nome completo do titular e o número de CPF. Retorne o CPF só com os 11 ' +
-  'dígitos, sem pontuação nem traço. Se não conseguir ler o nome ou o CPF com clareza, ' +
-  'retorne null nesse campo — nunca invente ou complete dígitos que não conseguiu ver. ' +
-  'Use confianca "alta" somente quando o CPF tiver os 11 dígitos claramente legíveis e ' +
-  'sem ambiguidade; em qualquer outro caso, use "baixa".';
+  'Esta imagem é uma CNH (Carteira Nacional de Habilitação) ou um RG brasileiro — o parceiro ' +
+  'não separou os arquivos por tipo, então identifique você qual é. Extraia o nome completo ' +
+  'do titular, o número de CPF e o tipo do documento ("cnh" ou "rg"). Retorne o CPF só com os ' +
+  '11 dígitos, sem pontuação nem traço. Se não conseguir ler o nome, o CPF ou identificar o ' +
+  'tipo com clareza, retorne null nesse campo — nunca invente ou complete dígitos que não ' +
+  'conseguiu ver, nem chute o tipo se a imagem não deixar claro. Use confianca "alta" somente ' +
+  'quando o CPF tiver os 11 dígitos claramente legíveis e sem ambiguidade; em qualquer outro ' +
+  'caso, use "baixa".';
 
 export class ClaudeOcrProvider implements OcrProvider {
   private client: Anthropic;
@@ -31,7 +36,7 @@ export class ClaudeOcrProvider implements OcrProvider {
 
   async lerDocumento(input: DocumentoLidoInput): Promise<DocumentoLido> {
     if (!MIME_TYPES_SUPORTADOS.has(input.mimeType)) {
-      return { nome: null, cpf: null, confianca: 'baixa' };
+      return DOCUMENTO_VAZIO;
     }
 
     try {
@@ -54,16 +59,17 @@ export class ClaudeOcrProvider implements OcrProvider {
       });
 
       const parsed = response.parsed_output;
-      if (!parsed) return { nome: null, cpf: null, confianca: 'baixa' };
+      if (!parsed) return DOCUMENTO_VAZIO;
 
       return {
         nome: parsed.nome?.trim() || null,
         cpf: parsed.cpf ? parsed.cpf.replace(/\D/g, '') : null,
+        tipoDocumento: parsed.tipoDocumento,
         confianca: parsed.confianca,
       };
     } catch (err) {
       console.error('[ClaudeOcrProvider] falha ao ler documento:', err);
-      return { nome: null, cpf: null, confianca: 'baixa' };
+      return DOCUMENTO_VAZIO;
     }
   }
 }

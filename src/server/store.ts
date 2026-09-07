@@ -1463,18 +1463,17 @@ async function presignDocumentoUpload(
   return { uploadUrl, key, headers };
 }
 
-/** Igual a presignDocumentoUpload, mas sem associado ainda — usado no anexo
- * com leitura automática (OCR), onde o arquivo é enviado antes de sabermos
- * de quem é. A key vira permanente se o documento for confirmado depois
- * (confirmarDocumentoUpload aceita qualquer key, não só a convenção
- * documentos/{tenant}/{associadoId}/{tipo}) — não precisa mover o arquivo. */
+/** Igual a presignDocumentoUpload, mas sem associado nem tipo ainda —
+ * usado no anexo com leitura automática (OCR), onde o parceiro solta os
+ * arquivos de uma vez (sem separar CNH de RG em seleções diferentes) e o
+ * sistema descobre associado e tipo depois de ler a imagem. A key vira
+ * permanente se o documento for confirmado depois (confirmarDocumentoUpload
+ * aceita qualquer key, não só a convenção documentos/{tenant}/{associadoId}/{tipo})
+ * — não precisa mover o arquivo. */
 async function presignStagingUpload(
-  tipo: TipoDocumento,
   mimeType: string,
 ): Promise<{ uploadUrl: string; key: string; headers?: Record<string, string> }> {
-  if (!TIPOS_DOCUMENTO.includes(tipo)) throw new Error(`Tipo de documento inválido: ${tipo}.`);
-
-  const key = `documentos/staging/${ABDCM_TENANT_ID}/${novoId('stg')}-${tipo}.${extensaoPorMime(mimeType)}`;
+  const key = `documentos/staging/${ABDCM_TENANT_ID}/${novoId('stg')}.${extensaoPorMime(mimeType)}`;
   const { uploadUrl, headers } = await getStorageProvider().criarUrlUpload({
     key,
     contentType: mimeType,
@@ -1485,8 +1484,10 @@ async function presignStagingUpload(
 
 export interface OcrPreviewItem {
   key: string;
-  tipo: TipoDocumento;
   nomeArquivo: string;
+  /** Tipo identificado na própria imagem — null quando a IA não conseguiu
+   * classificar com clareza, e aí a escolha fica manual na conferência. */
+  tipoDetectado: 'cnh' | 'rg' | null;
   ocrNome: string | null;
   ocrCpf: string | null;
   confianca: 'alta' | 'baixa';
@@ -1496,16 +1497,18 @@ export interface OcrPreviewItem {
   associadoIdSugerido: string | null;
   associadoNomeSugerido: string | null;
   autoConfirmavel: boolean;
-  jaTemEsseTipo: boolean;
+  associadoJaTemCnh: boolean;
+  associadoJaTemRg: boolean;
 }
 
 /** Lê cada arquivo já enviado pra um key de staging (presignStagingUpload),
- * tenta casar com um associado existente pelo CPF lido e devolve tudo pra
- * conferência humana (I3) — nada é gravado em documentos_associado aqui.
- * Confiança baixa ou CPF não encontrado na base voltam com associadoId nulo,
- * pra fila de conferência manual (nunca descarta silenciosamente). */
+ * identifica o tipo (CNH/RG) e tenta casar com um associado existente pelo
+ * CPF lido, devolvendo tudo pra conferência humana (I3) — nada é gravado em
+ * documentos_associado aqui. Confiança baixa, tipo não identificado ou CPF
+ * não encontrado na base voltam pra fila de conferência manual (nunca
+ * descarta silenciosamente). */
 async function lerDocumentosOcr(
-  itens: { key: string; tipo: TipoDocumento; mimeType: string; nomeArquivo: string }[],
+  itens: { key: string; mimeType: string; nomeArquivo: string }[],
   parceiroId?: string,
 ): Promise<OcrPreviewItem[]> {
   const todosAssociados = await db().select().from(schema.associados).where(eq(schema.associados.tenantId, ABDCM_TENANT_ID));
@@ -1531,15 +1534,16 @@ async function lerDocumentosOcr(
 
       return {
         key: item.key,
-        tipo: item.tipo,
         nomeArquivo: item.nomeArquivo,
+        tipoDetectado: lido.tipoDocumento,
         ocrNome: lido.nome,
         ocrCpf: lido.cpf,
         confianca: lido.confianca,
         associadoIdSugerido: associadoValido?.id ?? null,
         associadoNomeSugerido: associadoValido?.nome ?? null,
-        autoConfirmavel: lido.confianca === 'alta' && Boolean(associadoValido),
-        jaTemEsseTipo: docs.has(item.tipo),
+        autoConfirmavel: lido.confianca === 'alta' && Boolean(associadoValido) && lido.tipoDocumento !== null,
+        associadoJaTemCnh: docs.has('cnh'),
+        associadoJaTemRg: docs.has('rg'),
       };
     }),
   );

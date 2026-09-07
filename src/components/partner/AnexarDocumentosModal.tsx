@@ -24,24 +24,25 @@ interface ArquivoEncontrado {
 interface ArquivoOcr {
   id: string;
   file: File;
-  tipo: 'cnh' | 'rg';
 }
 
 interface OcrPreviewItemApi {
   key: string;
-  tipo: 'cnh' | 'rg';
   nomeArquivo: string;
+  tipoDetectado: 'cnh' | 'rg' | null;
   ocrNome: string | null;
   ocrCpf: string | null;
   confianca: 'alta' | 'baixa';
   associadoIdSugerido: string | null;
   associadoNomeSugerido: string | null;
   autoConfirmavel: boolean;
-  jaTemEsseTipo: boolean;
+  associadoJaTemCnh: boolean;
+  associadoJaTemRg: boolean;
 }
 
 interface OcrItemLocal extends OcrPreviewItemApi {
   associadoIdEscolhido: string | null;
+  tipoEscolhido: 'cnh' | 'rg' | null;
   incluir: boolean;
 }
 
@@ -86,8 +87,7 @@ function agruparArquivos(fileList: File[]): { encontrados: ArquivoEncontrado[]; 
 
 export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ isOpen, onClose, onConcluido }) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const inputCnhRef = useRef<HTMLInputElement>(null);
-  const inputRgRef = useRef<HTMLInputElement>(null);
+  const inputOcrRef = useRef<HTMLInputElement>(null);
 
   const [modo, setModo] = useState<Modo>('pastas');
   const [etapa, setEtapa] = useState<Etapa>('selecionar');
@@ -245,7 +245,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
 
   // --- Modo "leitura automática (IA)" ---
 
-  const handleArquivosOcrSelecionados = (tipo: 'cnh' | 'rg') => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleArquivosOcrSelecionados = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files: FileList | null = e.target.files;
     if (!files || files.length === 0) {
       e.target.value = '';
@@ -254,9 +254,8 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
     // Clonar antes de limpar o input: FileList é a mesma referência viva do
     // elemento — limpar e.target.value esvazia também o FileList já capturado.
     const novos: ArquivoOcr[] = Array.from(files).map((file, i) => ({
-      id: `${Date.now()}-${tipo}-${i}-${file.name}`,
+      id: `${Date.now()}-${i}-${file.name}`,
       file,
-      tipo,
     }));
     e.target.value = '';
     setArquivosOcr((prev) => [...prev, ...novos]);
@@ -272,7 +271,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
     setErro(null);
     setProgresso({ feitos: 0, total: arquivosOcr.length });
 
-    const itensStaged: { key: string; tipo: 'cnh' | 'rg'; mimeType: string; nomeArquivo: string }[] = [];
+    const itensStaged: { key: string; mimeType: string; nomeArquivo: string }[] = [];
     const porKey = new Map<string, File>();
     const falhasLocais: string[] = [];
     let feitos = 0;
@@ -287,7 +286,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
           const presignRes = await fetch('/api/documentos/staging/presign', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tipo: item.tipo, mimeType }),
+            body: JSON.stringify({ mimeType }),
           });
           const presignData = await presignRes.json();
           if (!presignRes.ok) throw new Error(presignData.error || 'Falha ao autorizar upload');
@@ -299,7 +298,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
           });
           if (!uploadRes.ok) throw new Error('Falha ao enviar o arquivo pro armazenamento');
 
-          itensStaged.push({ key: presignData.key, tipo: item.tipo, mimeType, nomeArquivo: item.file.name });
+          itensStaged.push({ key: presignData.key, mimeType, nomeArquivo: item.file.name });
           porKey.set(presignData.key, item.file);
         } catch (err) {
           falhasLocais.push(`${item.file.name}: ${err instanceof Error ? err.message : 'erro desconhecido'}`);
@@ -335,11 +334,16 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
       setAssociadosLista(associadosData);
       setFalhasStaging(falhasLocais);
       setOcrItens(
-        (previewData as OcrPreviewItemApi[]).map((item) => ({
-          ...item,
-          associadoIdEscolhido: item.associadoIdSugerido,
-          incluir: item.autoConfirmavel && !item.jaTemEsseTipo,
-        })),
+        (previewData as OcrPreviewItemApi[]).map((item) => {
+          const jaTemTipoDetectado =
+            item.tipoDetectado === 'cnh' ? item.associadoJaTemCnh : item.tipoDetectado === 'rg' ? item.associadoJaTemRg : false;
+          return {
+            ...item,
+            associadoIdEscolhido: item.associadoIdSugerido,
+            tipoEscolhido: item.tipoDetectado,
+            incluir: item.autoConfirmavel && !jaTemTipoDetectado,
+          };
+        }),
       );
       setEtapa('preview');
     } catch (err) {
@@ -357,12 +361,20 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
   const handleEscolherAssociadoOcr = (key: string, associadoId: string) => {
     setOcrItens((prev) =>
       prev.map((it) =>
-        it.key === key ? { ...it, associadoIdEscolhido: associadoId || null, incluir: Boolean(associadoId) } : it,
+        it.key === key
+          ? { ...it, associadoIdEscolhido: associadoId || null, incluir: Boolean(associadoId) && Boolean(it.tipoEscolhido) }
+          : it,
       ),
     );
   };
 
-  const itensOcrParaEnviar = ocrItens.filter((i) => i.incluir && i.associadoIdEscolhido);
+  const handleEscolherTipoOcr = (key: string, tipo: 'cnh' | 'rg') => {
+    setOcrItens((prev) =>
+      prev.map((it) => (it.key === key ? { ...it, tipoEscolhido: tipo, incluir: Boolean(it.associadoIdEscolhido) } : it)),
+    );
+  };
+
+  const itensOcrParaEnviar = ocrItens.filter((i) => i.incluir && i.associadoIdEscolhido && i.tipoEscolhido);
 
   const handleConfirmarEnvioOcr = async () => {
     setEtapa('enviando');
@@ -383,7 +395,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               associadoId: item.associadoIdEscolhido,
-              tipo: item.tipo,
+              tipo: item.tipoEscolhido,
               key: item.key,
               mimeType: file?.type || 'application/octet-stream',
               nomeArquivo: item.nomeArquivo,
@@ -494,43 +506,26 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
               {modo === 'ocr' && (
                 <div className="space-y-3">
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    Selecione as fotos de CNH e/ou RG dos associados — sem precisar organizar em pastas. O
-                    sistema lê o nome e o CPF direto da imagem e sugere o associado; nada é anexado sem sua
+                    Selecione de uma vez todas as fotos de CNH e RG dos associados — misturadas, sem
+                    separar por tipo nem organizar em pastas. O sistema identifica sozinho o tipo do
+                    documento, o nome e o CPF de cada foto e sugere o associado; nada é anexado sem sua
                     conferência na próxima tela.
                   </p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => inputCnhRef.current?.click()}
-                      className="py-6 border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center gap-2 text-slate-500 hover:border-[#148296] hover:text-[#148296] hover:bg-[#148296]/5 cursor-pointer transition-colors"
-                    >
-                      <Upload className="w-6 h-6" />
-                      <span className="text-xs font-bold">Fotos de CNH</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => inputRgRef.current?.click()}
-                      className="py-6 border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center gap-2 text-slate-500 hover:border-[#148296] hover:text-[#148296] hover:bg-[#148296]/5 cursor-pointer transition-colors"
-                    >
-                      <Upload className="w-6 h-6" />
-                      <span className="text-xs font-bold">Fotos de RG</span>
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => inputOcrRef.current?.click()}
+                    className="w-full py-8 border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center gap-2 text-slate-500 hover:border-[#148296] hover:text-[#148296] hover:bg-[#148296]/5 cursor-pointer transition-colors"
+                  >
+                    <Upload className="w-8 h-8" />
+                    <span className="text-xs font-bold">Selecionar todos os documentos (CNH e RG juntos)</span>
+                  </button>
                   <input
-                    ref={inputCnhRef}
+                    ref={inputOcrRef}
                     type="file"
                     accept="image/*"
                     multiple
                     className="hidden"
-                    onChange={handleArquivosOcrSelecionados('cnh')}
-                  />
-                  <input
-                    ref={inputRgRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={handleArquivosOcrSelecionados('rg')}
+                    onChange={handleArquivosOcrSelecionados}
                   />
 
                   {arquivosOcr.length > 0 && (
@@ -538,16 +533,13 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
                       {arquivosOcr.map((a) => (
                         <div key={a.id} className="px-3 py-2 flex items-center justify-between text-xs">
                           <span className="truncate text-slate-700">{a.file.name}</span>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-[10px] font-mono text-slate-400">{a.tipo.toUpperCase()}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoverArquivoOcr(a.id)}
-                              className="text-slate-400 hover:text-rose-600 cursor-pointer"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoverArquivoOcr(a.id)}
+                            className="text-slate-400 hover:text-rose-600 cursor-pointer shrink-0"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -655,59 +647,77 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
               )}
 
               <div className="space-y-2 max-h-72 overflow-y-auto">
-                {ocrItens.map((item) => (
-                  <div
-                    key={item.key}
-                    className={`border rounded-xl p-3 text-xs space-y-2 ${
-                      item.incluir ? 'border-[#148296]/30 bg-[#148296]/5' : 'border-slate-200 bg-slate-50'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-bold text-slate-800 truncate">{item.nomeArquivo}</p>
-                        <p className="text-[10px] text-slate-500 font-mono">
-                          {item.tipo.toUpperCase()} · lido: {item.ocrNome || '—'}
-                          {item.ocrCpf ? ` · CPF ${item.ocrCpf}` : ''}
-                        </p>
+                {ocrItens.map((item) => {
+                  const jaTemEsseTipo =
+                    item.tipoEscolhido === 'cnh' ? item.associadoJaTemCnh : item.tipoEscolhido === 'rg' ? item.associadoJaTemRg : false;
+                  return (
+                    <div
+                      key={item.key}
+                      className={`border rounded-xl p-3 text-xs space-y-2 ${
+                        item.incluir ? 'border-[#148296]/30 bg-[#148296]/5' : 'border-slate-200 bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-800 truncate">{item.nomeArquivo}</p>
+                          <p className="text-[10px] text-slate-500 font-mono">
+                            lido: {item.ocrNome || '—'}
+                            {item.ocrCpf ? ` · CPF ${item.ocrCpf}` : ''}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            item.confianca === 'alta' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                          }`}
+                        >
+                          {item.confianca === 'alta' ? 'confiança alta' : 'confiança baixa'}
+                        </span>
                       </div>
-                      <span
-                        className={`shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          item.confianca === 'alta' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                        }`}
-                      >
-                        {item.confianca === 'alta' ? 'confiança alta' : 'confiança baixa'}
-                      </span>
-                    </div>
 
-                    {item.jaTemEsseTipo && (
-                      <p className="text-[10px] text-amber-700 font-semibold">
-                        Este associado já tem um {item.tipo.toUpperCase()} — o upload vai substituir.
-                      </p>
-                    )}
+                      {jaTemEsseTipo && (
+                        <p className="text-[10px] text-amber-700 font-semibold">
+                          Este associado já tem um {item.tipoEscolhido?.toUpperCase()} — o upload vai substituir.
+                        </p>
+                      )}
 
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={item.incluir}
-                        disabled={!item.associadoIdEscolhido}
-                        onChange={() => handleToggleIncluirOcr(item.key)}
-                        className="shrink-0"
-                      />
-                      <select
-                        value={item.associadoIdEscolhido || ''}
-                        onChange={(e) => handleEscolherAssociadoOcr(item.key, e.target.value)}
-                        className="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white cursor-pointer"
-                      >
-                        <option value="">— selecionar associado manualmente —</option>
-                        {associadosLista.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.nome} — {a.cpf_cnpj}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={item.incluir}
+                          disabled={!item.associadoIdEscolhido || !item.tipoEscolhido}
+                          onChange={() => handleToggleIncluirOcr(item.key)}
+                          className="shrink-0"
+                        />
+                        <div className="flex rounded-lg border border-slate-200 overflow-hidden shrink-0">
+                          {(['cnh', 'rg'] as const).map((tipo) => (
+                            <button
+                              key={tipo}
+                              type="button"
+                              onClick={() => handleEscolherTipoOcr(item.key, tipo)}
+                              className={`px-2 py-1.5 text-[10px] font-bold cursor-pointer transition-colors ${
+                                item.tipoEscolhido === tipo ? 'bg-[#148296] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {tipo.toUpperCase()}
+                            </button>
+                          ))}
+                        </div>
+                        <select
+                          value={item.associadoIdEscolhido || ''}
+                          onChange={(e) => handleEscolherAssociadoOcr(item.key, e.target.value)}
+                          className="flex-1 min-w-0 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white cursor-pointer"
+                        >
+                          <option value="">— selecionar associado manualmente —</option>
+                          {associadosLista.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.nome} — {a.cpf_cnpj}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
