@@ -506,9 +506,10 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
               {modo === 'ocr' && (
                 <div className="space-y-3">
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    Selecione de uma vez todas as fotos de CNH e RG dos associados — misturadas, sem
-                    separar por tipo nem organizar em pastas. O sistema identifica sozinho o tipo do
-                    documento, o nome e o CPF de cada foto e sugere o associado; nada é anexado sem sua
+                    Selecione de uma vez todos os documentos dos associados — fotos ou PDF, CNH e RG
+                    misturados, sem separar por tipo nem organizar em pastas. Aceita o PDF que costuma
+                    sair do app do Detran/Serpro, além de foto. O sistema identifica sozinho o tipo do
+                    documento, o nome e o CPF de cada um e sugere o associado; nada é anexado sem sua
                     conferência na próxima tela.
                   </p>
                   <button
@@ -517,12 +518,12 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
                     className="w-full py-8 border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center gap-2 text-slate-500 hover:border-[#148296] hover:text-[#148296] hover:bg-[#148296]/5 cursor-pointer transition-colors"
                   >
                     <Upload className="w-8 h-8" />
-                    <span className="text-xs font-bold">Selecionar todos os documentos (CNH e RG juntos)</span>
+                    <span className="text-xs font-bold">Selecionar todos os documentos (fotos e PDF, CNH e RG juntos)</span>
                   </button>
                   <input
                     ref={inputOcrRef}
                     type="file"
-                    accept="image/*"
+                    accept="image/*,application/pdf"
                     multiple
                     className="hidden"
                     onChange={handleArquivosOcrSelecionados}
