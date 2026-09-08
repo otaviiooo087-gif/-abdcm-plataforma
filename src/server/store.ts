@@ -358,6 +358,48 @@ async function buscarUsuarioPorId(id: string): Promise<UserSession | null> {
   return usuarioParaSessao(row);
 }
 
+/** Lista de contas de login reais (parceiro/administrador) — Controle de Acesso. */
+async function listarUsuarios(): Promise<
+  { id: string; nome: string; email: string; role: UserRole; parceiro_id: string | null; ativo: boolean; created_at: string }[]
+> {
+  const linhas = await db()
+    .select()
+    .from(schema.usuarios)
+    .where(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.usuarios.createdAt));
+  return linhas.map((u) => ({
+    id: u.id,
+    nome: u.nome,
+    email: u.email,
+    role: u.role as UserRole,
+    parceiro_id: u.parceiroId,
+    ativo: u.ativo,
+    created_at: u.createdAt,
+  }));
+}
+
+/** Ativa/desativa uma conta de login (revoga acesso sem apagar o histórico). */
+async function setUsuarioAtivo(usuarioId: string, ativo: boolean, atorUserId: string): Promise<void> {
+  const [atual] = await db().select().from(schema.usuarios).where(eq(schema.usuarios.id, usuarioId));
+  if (!atual) throw new Error('Conta não encontrada.');
+
+  await db().update(schema.usuarios).set({ ativo }).where(eq(schema.usuarios.id, usuarioId));
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: atual.tenantId,
+    atorUserId,
+    acao: ativo ? 'CONTA_REATIVADA' : 'CONTA_DESATIVADA',
+    entidadeTipo: 'usuarios',
+    entidadeId: usuarioId,
+    antes: { ativo: atual.ativo },
+    depois: { ativo },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: new Date().toISOString(),
+  });
+}
+
 async function autenticarUsuario(
   email: string,
   senha: string,
@@ -2737,6 +2779,8 @@ export const serverStore = {
   getSession,
   setRole,
   buscarUsuarioPorId,
+  listarUsuarios,
+  setUsuarioAtivo,
   autenticarUsuario,
   registrarParceiro,
   alterarSenha,

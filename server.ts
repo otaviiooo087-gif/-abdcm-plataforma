@@ -888,6 +888,32 @@ async function startServer() {
   });
 
   // 6.6 Status das integrações (Configurações > APIs) — nunca expõe a chave, só se está configurada.
+  // 6.4.1 Controle de Acesso — lista de contas reais e ativar/desativar
+  app.get('/api/admin/usuarios', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM vê as contas de acesso.' });
+      return;
+    }
+    res.json(await serverStore.listarUsuarios());
+  });
+
+  app.patch('/api/admin/usuarios/:id/ativo', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role !== 'administrador') {
+        res.status(403).json({ error: 'Apenas o administrador ativa ou desativa contas de acesso.' });
+        return;
+      }
+      const { ativo } = req.body;
+      await serverStore.setUsuarioAtivo(req.params.id, Boolean(ativo), session.id);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar conta';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 6.5.1 Métricas extras do Dashboard (parceiros novos, rankings) — admin only
   app.get('/api/admin/dashboard-extra', async (_req: Request, res: Response) => {
     const session = serverStore.getSession();

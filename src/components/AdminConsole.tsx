@@ -7,6 +7,7 @@ import { AdminProcessosTab } from './admin/AdminProcessosTab.js';
 import { AdminAssociadosTab } from './admin/AdminAssociadosTab.js';
 import { AdminFinanceiroTab } from './admin/AdminFinanceiroTab.js';
 import { AdminConfiguracoesTab } from './admin/AdminConfiguracoesTab.js';
+import { AdminControleAcessoTab } from './admin/AdminControleAcessoTab.js';
 import { AdminDashboardTab } from './admin/AdminDashboardTab.js';
 import { AdminServicosTab } from './admin/AdminServicosTab.js';
 import { AdminEventosTab } from './admin/AdminEventosTab.js';
@@ -332,6 +333,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ==================================================== */}
       {activeTab === 'controle' && (
         <div className="space-y-6">
+          <AdminControleAcessoTab registros={registros} lotes={lotes} session={session} />
+
           {/* Barra de Filtro de Auditoria com layout idêntico */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3">
             <div className="relative flex-1 max-w-md">
