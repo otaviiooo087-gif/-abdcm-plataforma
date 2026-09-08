@@ -184,6 +184,46 @@ export const marketingGrupoConfig = pgTable('marketing_grupo_config', {
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
+// Mensagens extras por gatilho — aba Automações > "Criar Nova Mensagem".
+export const mensagensExtra = pgTable('mensagens_extra', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  gatilho: text('gatilho').notNull(),
+  nome: text('nome').notNull(),
+  mensagem: text('mensagem').notNull(),
+  ativo: boolean('ativo').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Automação de ligação — MOCK (ver nota na migration 0013): nenhum
+// provedor de telefonia/IVR está contratado ainda.
+export const chamadasConfig = pgTable('chamadas_config', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  servicoId: text('servico_id'),
+  nome: text('nome').notNull(),
+  roteiroAbertura: text('roteiro_abertura').notNull(),
+  roteiroRespostaSim: text('roteiro_resposta_sim').notNull(),
+  roteiroRespostaNao: text('roteiro_resposta_nao').notNull(),
+  diasAntesPrazo: integer('dias_antes_prazo'),
+  ativo: boolean('ativo').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const chamadasLog = pgTable('chamadas_log', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  configId: text('config_id').notNull(),
+  servicoId: text('servico_id'),
+  associadoId: text('associado_id'),
+  telefone: text('telefone').notNull(),
+  resultado: text('resultado').notNull(),
+  transcricao: text('transcricao').notNull(),
+  origem: text('origem').notNull().default('manual'),
+  criadoEm: timestamp('criado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
 export const contratos = pgTable('contratos', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull(),

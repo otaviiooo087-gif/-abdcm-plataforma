@@ -236,6 +236,45 @@ export interface MarketingGrupoConfig {
   atualizado_em: string;
 }
 
+// Mensagem extra por gatilho — aba Automações > "Criar Nova Mensagem".
+export interface MensagemExtra {
+  id: string;
+  tenant_id: string;
+  gatilho: TipoNotificacao;
+  nome: string;
+  mensagem: string;
+  ativo: boolean;
+  created_at: string;
+}
+
+// Automação de ligação — MOCK (ver migration 0013 / CLAUDE.md seção 8).
+export interface ChamadaConfig {
+  id: string;
+  tenant_id: string;
+  servico_id: string | null; // null = Ação Limpa Nome / lotes em geral
+  nome: string;
+  roteiro_abertura: string;
+  roteiro_resposta_sim: string;
+  roteiro_resposta_nao: string;
+  dias_antes_prazo: number | null;
+  ativo: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChamadaLog {
+  id: string;
+  tenant_id: string;
+  config_id: string;
+  servico_id: string | null;
+  associado_id: string | null;
+  telefone: string;
+  resultado: 'sim' | 'nao' | 'sem_resposta';
+  transcricao: string;
+  origem: 'manual' | 'automatico';
+  criado_em: string;
+}
+
 // Contrato-modelo que o admin disponibiliza aos associados/parceiros.
 export interface Contrato {
   id: string;
@@ -273,7 +312,8 @@ export type TipoNotificacao =
   | 'follow_up_lista'
   | 'status_processo'
   | 'pagamento_pendente'
-  | 'lote_encerrado';
+  | 'lote_encerrado'
+  | 'cadastro_associado';
 
 // Registro de envio (log + chave de deduplicação do motor de automação).
 export interface NotificacaoEnviada {

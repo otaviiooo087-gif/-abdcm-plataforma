@@ -40,7 +40,11 @@ import type {
   MarketingCronogramaDia,
   MarketingDisparo,
   MarketingGrupoConfig,
+  MensagemExtra,
+  ChamadaConfig,
+  ChamadaLog,
 } from '../domain/types.js';
+import { getLigacaoProvider } from '../integrations/ligacao/index.js';
 import { ORGAOS_BUREAU } from '../domain/types.js';
 import { getNadaConstaProvider } from '../integrations/nadaconsta/index.js';
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
@@ -2420,7 +2424,20 @@ export const AUTOMACOES_DISPONIVEIS: Record<
       'Ação Coletiva 124 encerrada! Foram 87 nomes captados. Baixe a documentação completa aqui: https://... (link válido por 7 dias)',
     configPadrao: { numeros: [] },
   },
+  cadastro_associado: {
+    nome: 'Boas-vindas ao se cadastrar',
+    descricao:
+      'Manda uma mensagem de boas-vindas assim que um associado com WhatsApp cadastrado entra no sistema (cadastro individual ou por planilha).',
+    exemplo:
+      'Boa tarde João! Aqui é da ABDCM 👋 Seja muito bem-vindo(a) ao sistema ABDCM! Você agora faz parte da nossa Ação Coletiva Limpa Nome — fica de olho por aqui que a gente avisa assim que a próxima lista abrir pra você anexar seus nomes.',
+    configPadrao: {},
+  },
 };
+
+/** Substitui tokens {saudacao}, {nome} etc. em templates editáveis pelo admin. */
+export function aplicarTemplateMensagem(template: string, tokens: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (match, chave) => tokens[chave] ?? match);
+}
 
 export async function getAutomacoesConfig(): Promise<AutomacaoConfig[]> {
   const linhas = await db().select().from(schema.automacoesConfig).where(eq(schema.automacoesConfig.tenantId, ABDCM_TENANT_ID));
@@ -2483,6 +2500,260 @@ async function getNotificacoesLog(limite = 50): Promise<NotificacaoEnviada[]> {
     .orderBy(desc(schema.notificacoesEnviadas.enviadoEm))
     .limit(limite);
   return linhas.map(notificacaoDeLinha);
+}
+
+// ---------------------------------------------------------------------
+// Mensagens extras por gatilho — aba Automações > "Criar Nova Mensagem"
+// ---------------------------------------------------------------------
+
+function mensagemExtraDeLinha(m: typeof schema.mensagensExtra.$inferSelect): MensagemExtra {
+  return {
+    id: m.id,
+    tenant_id: m.tenantId,
+    gatilho: m.gatilho as TipoNotificacao,
+    nome: m.nome,
+    mensagem: m.mensagem,
+    ativo: m.ativo,
+    created_at: m.createdAt,
+  };
+}
+
+export async function getMensagensExtra(): Promise<MensagemExtra[]> {
+  const linhas = await db().select().from(schema.mensagensExtra).where(eq(schema.mensagensExtra.tenantId, ABDCM_TENANT_ID));
+  return linhas.map(mensagemExtraDeLinha);
+}
+
+async function createMensagemExtra(data: { gatilho: TipoNotificacao; nome: string; mensagem: string }): Promise<MensagemExtra> {
+  if (!(data.gatilho in AUTOMACOES_DISPONIVEIS)) throw new Error('Gatilho inválido.');
+  if (!data.nome?.trim()) throw new Error('Nome é obrigatório.');
+  if (!data.mensagem?.trim()) throw new Error('Mensagem é obrigatória.');
+
+  const novo = {
+    id: novoId('msgx'),
+    tenantId: ABDCM_TENANT_ID,
+    gatilho: data.gatilho,
+    nome: data.nome.trim(),
+    mensagem: data.mensagem.trim(),
+    ativo: true,
+    createdAt: new Date().toISOString(),
+  };
+  await db().insert(schema.mensagensExtra).values(novo);
+  return mensagemExtraDeLinha(novo as typeof schema.mensagensExtra.$inferSelect);
+}
+
+async function updateMensagemExtra(id: string, data: Partial<{ nome: string; mensagem: string; ativo: boolean }>): Promise<MensagemExtra> {
+  const [atual] = await db().select().from(schema.mensagensExtra).where(eq(schema.mensagensExtra.id, id));
+  if (!atual) throw new Error('Mensagem não encontrada.');
+  const patch: Partial<typeof schema.mensagensExtra.$inferSelect> = {};
+  if (data.nome !== undefined) patch.nome = data.nome;
+  if (data.mensagem !== undefined) patch.mensagem = data.mensagem;
+  if (data.ativo !== undefined) patch.ativo = data.ativo;
+  await db().update(schema.mensagensExtra).set(patch).where(eq(schema.mensagensExtra.id, id));
+  return mensagemExtraDeLinha({ ...atual, ...patch });
+}
+
+async function deleteMensagemExtra(id: string): Promise<void> {
+  await db().delete(schema.mensagensExtra).where(eq(schema.mensagensExtra.id, id));
+}
+
+// ---------------------------------------------------------------------
+// Automação de ligação — MOCK (ver migration 0013 / CLAUDE.md seção 8)
+// ---------------------------------------------------------------------
+
+function chamadaConfigDeLinha(c: typeof schema.chamadasConfig.$inferSelect): ChamadaConfig {
+  return {
+    id: c.id,
+    tenant_id: c.tenantId,
+    servico_id: c.servicoId,
+    nome: c.nome,
+    roteiro_abertura: c.roteiroAbertura,
+    roteiro_resposta_sim: c.roteiroRespostaSim,
+    roteiro_resposta_nao: c.roteiroRespostaNao,
+    dias_antes_prazo: c.diasAntesPrazo,
+    ativo: c.ativo,
+    created_at: c.createdAt,
+    updated_at: c.updatedAt,
+  };
+}
+
+function chamadaLogDeLinha(l: typeof schema.chamadasLog.$inferSelect): ChamadaLog {
+  return {
+    id: l.id,
+    tenant_id: l.tenantId,
+    config_id: l.configId,
+    servico_id: l.servicoId,
+    associado_id: l.associadoId,
+    telefone: l.telefone,
+    resultado: l.resultado as ChamadaLog['resultado'],
+    transcricao: l.transcricao,
+    origem: l.origem as ChamadaLog['origem'],
+    criado_em: l.criadoEm,
+  };
+}
+
+async function getChamadasConfig(): Promise<ChamadaConfig[]> {
+  const linhas = await db().select().from(schema.chamadasConfig).where(eq(schema.chamadasConfig.tenantId, ABDCM_TENANT_ID));
+  return linhas.map(chamadaConfigDeLinha);
+}
+
+async function createChamadaConfig(data: {
+  servicoId?: string | null;
+  nome: string;
+  roteiroAbertura: string;
+  roteiroRespostaSim: string;
+  roteiroRespostaNao: string;
+  diasAntesPrazo?: number | null;
+}): Promise<ChamadaConfig> {
+  if (!data.nome?.trim()) throw new Error('Nome é obrigatório.');
+  if (!data.roteiroAbertura?.trim() || !data.roteiroRespostaSim?.trim() || !data.roteiroRespostaNao?.trim()) {
+    throw new Error('Preencha o roteiro de abertura e as duas respostas (sim/não).');
+  }
+  const agora = new Date().toISOString();
+  const novo = {
+    id: novoId('call-cfg'),
+    tenantId: ABDCM_TENANT_ID,
+    servicoId: data.servicoId || null,
+    nome: data.nome.trim(),
+    roteiroAbertura: data.roteiroAbertura.trim(),
+    roteiroRespostaSim: data.roteiroRespostaSim.trim(),
+    roteiroRespostaNao: data.roteiroRespostaNao.trim(),
+    diasAntesPrazo: data.diasAntesPrazo ?? null,
+    ativo: true,
+    createdAt: agora,
+    updatedAt: agora,
+  };
+  await db().insert(schema.chamadasConfig).values(novo);
+  return chamadaConfigDeLinha(novo as typeof schema.chamadasConfig.$inferSelect);
+}
+
+async function updateChamadaConfig(
+  id: string,
+  data: Partial<{
+    nome: string;
+    roteiroAbertura: string;
+    roteiroRespostaSim: string;
+    roteiroRespostaNao: string;
+    diasAntesPrazo: number | null;
+    ativo: boolean;
+  }>,
+): Promise<ChamadaConfig> {
+  const [atual] = await db().select().from(schema.chamadasConfig).where(eq(schema.chamadasConfig.id, id));
+  if (!atual) throw new Error('Configuração de ligação não encontrada.');
+  const patch: Partial<typeof schema.chamadasConfig.$inferSelect> = { updatedAt: new Date().toISOString() };
+  if (data.nome !== undefined) patch.nome = data.nome;
+  if (data.roteiroAbertura !== undefined) patch.roteiroAbertura = data.roteiroAbertura;
+  if (data.roteiroRespostaSim !== undefined) patch.roteiroRespostaSim = data.roteiroRespostaSim;
+  if (data.roteiroRespostaNao !== undefined) patch.roteiroRespostaNao = data.roteiroRespostaNao;
+  if (data.diasAntesPrazo !== undefined) patch.diasAntesPrazo = data.diasAntesPrazo;
+  if (data.ativo !== undefined) patch.ativo = data.ativo;
+  await db().update(schema.chamadasConfig).set(patch).where(eq(schema.chamadasConfig.id, id));
+  return chamadaConfigDeLinha({ ...atual, ...patch });
+}
+
+async function deleteChamadaConfig(id: string): Promise<void> {
+  await db().delete(schema.chamadasConfig).where(eq(schema.chamadasConfig.id, id));
+}
+
+async function getChamadasLog(limite = 50): Promise<ChamadaLog[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.chamadasLog)
+    .where(eq(schema.chamadasLog.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.chamadasLog.criadoEm))
+    .limit(limite);
+  return linhas.map(chamadaLogDeLinha);
+}
+
+/** Testa uma configuração de ligação num telefone qualquer — sempre MOCK, nunca liga de verdade. */
+async function testarChamada(configId: string, telefone: string): Promise<ChamadaLog> {
+  const [config] = await db().select().from(schema.chamadasConfig).where(eq(schema.chamadasConfig.id, configId));
+  if (!config) throw new Error('Configuração de ligação não encontrada.');
+  if (!telefone?.trim()) throw new Error('Telefone é obrigatório.');
+
+  const hora = new Date().getHours();
+  const tokensTeste = {
+    saudacao: hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite',
+    nome: 'Associado Teste',
+    lote: 'Ação Coletiva',
+  };
+  const resultado = await getLigacaoProvider().ligar({
+    telefone: telefone.trim(),
+    roteiro: {
+      abertura: aplicarTemplateMensagem(config.roteiroAbertura, tokensTeste),
+      respostaSim: aplicarTemplateMensagem(config.roteiroRespostaSim, tokensTeste),
+      respostaNao: aplicarTemplateMensagem(config.roteiroRespostaNao, tokensTeste),
+    },
+  });
+
+  const novo = {
+    id: novoId('call-log'),
+    tenantId: ABDCM_TENANT_ID,
+    configId,
+    servicoId: config.servicoId,
+    associadoId: null,
+    telefone: telefone.trim(),
+    resultado: resultado.resultado,
+    transcricao: resultado.transcricao,
+    origem: 'manual' as const,
+    criadoEm: new Date().toISOString(),
+  };
+  await db().insert(schema.chamadasLog).values(novo);
+  return chamadaLogDeLinha(novo as typeof schema.chamadasLog.$inferSelect);
+}
+
+/**
+ * Roda pelo agendador já existente (a cada 15min). Pra cada configuração de
+ * ligação com follow-up configurado (dias_antes_prazo), liga (mock) pra
+ * associados elegíveis do lote vigente quando faltar exatamente esse tanto
+ * de dias pro encerramento — no máximo uma vez por associado por config
+ * (dedup por chamadas_log já registrado pra esse config+telefone).
+ */
+async function rodarFollowUpLigacoes(): Promise<number> {
+  const configs = await db().select().from(schema.chamadasConfig).where(and(eq(schema.chamadasConfig.tenantId, ABDCM_TENANT_ID), eq(schema.chamadasConfig.ativo, true)));
+  let totalLigacoes = 0;
+
+  for (const config of configs) {
+    if (!config.diasAntesPrazo) continue;
+    const lotesAbertos = await db().select().from(schema.lotes).where(eq(schema.lotes.status, 'aberto'));
+
+    for (const lote of lotesAbertos) {
+      const diasParaFechar = Math.ceil((new Date(lote.closesAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      if (diasParaFechar !== config.diasAntesPrazo) continue;
+
+      const associadosDb = await associadosComWhatsapp();
+      for (const associado of associadosDb) {
+        if (!associado.telefoneWhatsapp) continue;
+        const jaLigou = await db()
+          .select({ id: schema.chamadasLog.id })
+          .from(schema.chamadasLog)
+          .where(and(eq(schema.chamadasLog.configId, config.id), eq(schema.chamadasLog.telefone, associado.telefoneWhatsapp)));
+        if (jaLigou.length > 0) continue;
+
+        const resultado = await getLigacaoProvider().ligar({
+          telefone: associado.telefoneWhatsapp,
+          roteiro: {
+            abertura: aplicarTemplateMensagem(config.roteiroAbertura, { nome: associado.nome.split(' ')[0], lote: lote.nome }),
+            respostaSim: aplicarTemplateMensagem(config.roteiroRespostaSim, { nome: associado.nome.split(' ')[0], lote: lote.nome }),
+            respostaNao: aplicarTemplateMensagem(config.roteiroRespostaNao, { nome: associado.nome.split(' ')[0], lote: lote.nome }),
+          },
+        });
+        await db().insert(schema.chamadasLog).values({
+          id: novoId('call-log'),
+          tenantId: ABDCM_TENANT_ID,
+          configId: config.id,
+          servicoId: config.servicoId,
+          associadoId: associado.id,
+          telefone: associado.telefoneWhatsapp,
+          resultado: resultado.resultado,
+          transcricao: resultado.transcricao,
+          origem: 'automatico',
+          criadoEm: new Date().toISOString(),
+        });
+        totalLigacoes++;
+      }
+    }
+  }
+  return totalLigacoes;
 }
 
 // ---------------------------------------------------------------------
@@ -3054,6 +3325,17 @@ export const serverStore = {
   rodarMarketingCronogramaDoDia,
   getMarketingGrupoConfig,
   setMarketingGrupoConfig,
+  getMensagensExtra,
+  createMensagemExtra,
+  updateMensagemExtra,
+  deleteMensagemExtra,
+  getChamadasConfig,
+  createChamadaConfig,
+  updateChamadaConfig,
+  deleteChamadaConfig,
+  getChamadasLog,
+  testarChamada,
+  rodarFollowUpLigacoes,
   updateServico,
   deleteServico,
   getDashboardExtra,

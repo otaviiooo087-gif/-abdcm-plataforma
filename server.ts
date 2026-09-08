@@ -1096,6 +1096,97 @@ async function startServer() {
     }
   });
 
+  // 6.7.1 Mensagens extras por gatilho — botão "Criar Nova Mensagem"
+  const exigirEquipeAbdcm = (session: ReturnType<typeof serverStore.getSession>, res: Response): boolean => {
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa automações.' });
+      return false;
+    }
+    return true;
+  };
+
+  app.get('/api/automacoes/mensagens-extra', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getMensagensExtra());
+  });
+
+  app.post('/api/automacoes/mensagens-extra', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const novo = await serverStore.createMensagemExtra(req.body);
+      res.status(201).json(novo);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao criar mensagem' });
+    }
+  });
+
+  app.patch('/api/automacoes/mensagens-extra/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const atualizado = await serverStore.updateMensagemExtra(req.params.id, req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao atualizar mensagem' });
+    }
+  });
+
+  app.delete('/api/automacoes/mensagens-extra/:id', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (!exigirEquipeAbdcm(session, res)) return;
+    await serverStore.deleteMensagemExtra(req.params.id);
+    res.json({ success: true });
+  });
+
+  // 6.7.2 Automação de ligação — MOCK (CLAUDE.md seção 8)
+  app.get('/api/automacoes/chamadas', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getChamadasConfig());
+  });
+
+  app.post('/api/automacoes/chamadas', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const novo = await serverStore.createChamadaConfig(req.body);
+      res.status(201).json(novo);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao criar configuração de ligação' });
+    }
+  });
+
+  app.patch('/api/automacoes/chamadas/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const atualizado = await serverStore.updateChamadaConfig(req.params.id, req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao atualizar configuração de ligação' });
+    }
+  });
+
+  app.delete('/api/automacoes/chamadas/:id', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (!exigirEquipeAbdcm(session, res)) return;
+    await serverStore.deleteChamadaConfig(req.params.id);
+    res.json({ success: true });
+  });
+
+  app.post('/api/automacoes/chamadas/:id/testar', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const resultado = await serverStore.testarChamada(req.params.id, req.body.telefone);
+      res.json(resultado);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao testar ligação' });
+    }
+  });
+
+  app.get('/api/automacoes/chamadas/log', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getChamadasLog());
+  });
+
   // 6.8 Documentos do associado (CNH/RG) — upload em massa direto pro storage.
   // O servidor nunca recebe o arquivo: só confere o CPF (preview), autoriza
   // o upload (presign) e registra depois que o navegador já mandou (confirmar).
@@ -1339,6 +1430,8 @@ async function startServer() {
     // Cronograma semanal de marketing (aba Serviços > Marketing) — mesmo
     // agendador, idempotente por dia (ver rodarMarketingCronogramaDoDia).
     serverStore.rodarMarketingCronogramaDoDia().catch((err) => console.error('[marketing] falha no cronograma:', err));
+    // Follow-up de ligação (mock) — mesmo agendador, idempotente por config+telefone.
+    serverStore.rodarFollowUpLigacoes().catch((err) => console.error('[automacoes] falha no follow-up de ligação:', err));
   };
   setTimeout(() => {
     rodarTudo();
