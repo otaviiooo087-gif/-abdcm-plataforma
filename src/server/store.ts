@@ -1525,8 +1525,8 @@ async function lerDocumentosOcr(
 
   return Promise.all(
     itens.map(async (item) => {
-      const imagemUrl = resolverUrlAbsoluta(await getStorageProvider().criarUrlDownload(item.key, URL_STORAGE_EXPIRA_SEGUNDOS));
-      const lido = await ocr.lerDocumento({ imagemUrl, mimeType: item.mimeType });
+      const documentoUrl = resolverUrlAbsoluta(await getStorageProvider().criarUrlDownload(item.key, URL_STORAGE_EXPIRA_SEGUNDOS));
+      const lido = await ocr.lerDocumento({ documentoUrl, mimeType: item.mimeType });
 
       const associado = lido.cpf ? porCpf.get(lido.cpf) : undefined;
       const associadoValido = associado && (!parceiroId || associado.parceiroId === parceiroId) ? associado : null;

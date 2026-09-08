@@ -16,7 +16,9 @@
 // conferência manual, nunca descartam silenciosamente.
 
 export interface DocumentoLidoInput {
-  imagemUrl: string;
+  /** Aceita tanto foto (jpg/png/webp) quanto PDF — CNH costuma vir em PDF
+   * (download do app do Detran/Serpro), RG geralmente em foto. */
+  documentoUrl: string;
   mimeType: string;
 }
 
