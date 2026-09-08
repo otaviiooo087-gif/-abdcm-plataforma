@@ -9,6 +9,8 @@ interface OrgaoLogoBadgeProps {
   baixado?: boolean;
   /** Próximo órgão da fila — pulsa em âmbar enquanto ainda não deu baixa. */
   aguardando?: boolean;
+  /** Ação Coletiva concluída — brilho mais forte (halo colorido pulsante) além do pulso normal. */
+  glow?: boolean;
   size?: 'sm' | 'md' | 'lg';
   className?: string;
   showLabel?: boolean;
@@ -27,6 +29,7 @@ export const OrgaoLogoBadge: React.FC<OrgaoLogoBadgeProps> = ({
   orgao,
   baixado = false,
   aguardando = false,
+  glow = false,
   size = 'md',
   className = '',
   showLabel = true,
@@ -41,9 +44,19 @@ export const OrgaoLogoBadge: React.FC<OrgaoLogoBadgeProps> = ({
       src={ORGAO_LOGO_URL[orgao]}
       alt={ORGAO_BUREAU_LABEL[orgao]}
       className={`${TAMANHOS[size]} w-auto object-contain rounded ${baixado ? '' : 'grayscale opacity-40'}`}
-      animate={baixado ? { scale: [1, 1.06, 1] } : aguardando ? { scale: [1, 1.08, 1] } : {}}
+      animate={
+        glow
+          ? { scale: [1, 1.1, 1], filter: ['drop-shadow(0 0 0px #10b981)', 'drop-shadow(0 0 8px #10b981)', 'drop-shadow(0 0 0px #10b981)'] }
+          : baixado
+          ? { scale: [1, 1.06, 1] }
+          : aguardando
+          ? { scale: [1, 1.08, 1] }
+          : {}
+      }
       transition={
-        baixado
+        glow
+          ? { duration: 1.8, repeat: Infinity, ease: 'easeInOut' }
+          : baixado
           ? { duration: 1.2, repeat: 2, ease: 'easeInOut' }
           : aguardando
           ? { duration: 1.6, repeat: Infinity, ease: 'easeInOut' }
