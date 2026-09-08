@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Submissao, Registro, Lote } from '../../domain/types.js';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Submissao, Registro, Lote, ConfiguracaoEmpresa } from '../../domain/types.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { UserSession } from '../../server/mockData.js';
 import {
@@ -50,7 +50,15 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
   const [showReprovarModal, setShowReprovarModal] = useState(false);
   const [reprovarMotivo, setReprovarMotivo] = useState('');
 
-  const chavePixOficial = 'financeiro@abdcm.org.br';
+  const [empresa, setEmpresa] = useState<ConfiguracaoEmpresa | null>(null);
+  useEffect(() => {
+    fetch('/api/config/empresa')
+      .then((res) => (res.ok ? res.json() : null))
+      .then(setEmpresa)
+      .catch(() => setEmpresa(null));
+  }, []);
+
+  const chavePixOficial = empresa?.banco_pix_chave || 'Configure em Configurações > Empresa';
 
   const handleCopyPix = () => {
     navigator.clipboard.writeText(chavePixOficial);
@@ -273,7 +281,11 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
           </div>
           <div className="mt-2">
             <p className="text-2xl font-black text-[#148296]">{totalNomesPagos} associados</p>
-            <p className="text-[11px] text-slate-500 mt-0.5">R$ 55,00 por nome na Ação Coletiva</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {lotes.find((l) => l.status === 'aberto')
+                ? `${formatCurrencyBRL(lotes.find((l) => l.status === 'aberto')!.preco_por_nome)} por nome no lote vigente`
+                : 'Preço definido por lote'}
+            </p>
           </div>
         </div>
 
@@ -313,7 +325,16 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Razão Social: <strong>Associação Brasileira de Defesa do Consumidor e do Trabalhador</strong> • CNPJ: 45.892.124/0001-90
+                {empresa?.razao_social ? (
+                  <>
+                    Razão Social: <strong>{empresa.razao_social}</strong>
+                    {empresa.cnpj && <> • CNPJ: {empresa.cnpj}</>}
+                  </>
+                ) : (
+                  <span className="text-amber-600 font-semibold">
+                    Dados da empresa ainda não configurados — preencha em Configurações &gt; Empresa
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -339,8 +360,12 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
             </div>
 
             <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-              <span className="text-[10px] font-bold uppercase text-slate-400 mr-2">Bancos:</span>
-              <span className="font-semibold text-slate-800">Santander (033) & Nu Pagamentos</span>
+              <span className="text-[10px] font-bold uppercase text-slate-400 mr-2">Banco:</span>
+              <span className="font-semibold text-slate-800">
+                {empresa?.banco_nome
+                  ? `${empresa.banco_nome}${empresa.banco_agencia ? ` — Ag. ${empresa.banco_agencia}` : ''}${empresa.banco_conta ? ` / Cc. ${empresa.banco_conta}` : ''}`
+                  : 'Não configurado'}
+              </span>
             </div>
           </div>
         </div>
