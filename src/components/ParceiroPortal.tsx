@@ -18,7 +18,6 @@ import {
   Sparkles,
   ArrowRight,
   RefreshCw,
-  FileSpreadsheet,
   FileCheck2,
   Calendar,
   Building2,
@@ -40,7 +39,6 @@ import {
 import { CadastrarNomeModal } from './partner/CadastrarNomeModal.js';
 import { ImportarListaModal } from './partner/ImportarListaModal.js';
 import { EnviarListaModal } from './partner/EnviarListaModal.js';
-import { AnexarDocumentosModal } from './partner/AnexarDocumentosModal.js';
 import { PixPagamentoModal } from './partner/PixPagamentoModal.js';
 import { PagamentoConfirmadoModal } from './partner/PagamentoConfirmadoModal.js';
 import { MinhasListasView } from './partner/MinhasListasView.js';
@@ -99,7 +97,6 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   const [showCadastrarModal, setShowCadastrarModal] = useState(false);
   const [showImportarModal, setShowImportarModal] = useState(false);
   const [showEnviarModal, setShowEnviarModal] = useState(false);
-  const [showDocumentosModal, setShowDocumentosModal] = useState(false);
   const [documentosStatus, setDocumentosStatus] = useState<Record<string, StatusDocumentos>>({});
 
   const loadDocumentosStatus = () => {
@@ -633,10 +630,9 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
       {
         titulo: 'Enviar Limpa Nome',
         texto:
-          'Monte a lista de associados que vão entrar na Ação Coletiva vigente. Cadastre um nome por vez, importe uma planilha ou anexe documentos (CNH/RG/ficha) em massa. Quando a lista estiver pronta, clique em "Enviar Lista" — o sistema gera um PIX automático pelo valor total. O protocolo só é enviado depois da confirmação do pagamento.',
+          'Monte a lista de associados que vão entrar na Ação Coletiva vigente. Cadastre um nome por vez ou importe uma planilha — a importação já aceita anexar CNH/RG/ficha de cada um junto com os nomes. Quando a lista estiver pronta, clique em "Enviar Lista" — o sistema gera um PIX automático pelo valor total. O protocolo só é enviado depois da confirmação do pagamento.',
         passos: [
-          'Cadastre nomes com "+ Cadastrar Nome" ou "Importar Lista" (planilha)',
-          'Anexe CNH/RG e ficha associativa assinada em "Anexar Documentos"',
+          'Cadastre nomes com "+ Cadastrar Nome" ou "Importar Lista" (planilha, com documentos opcionais)',
           'Confira o total de nomes e valor no topo da tela',
           'Clique em "Enviar Lista" e pague o PIX gerado (expira em 60 minutos)',
         ],
@@ -1450,15 +1446,6 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
           <UploadCloud className="w-4 h-4" />
           Importar Lista
         </button>
-
-        <button
-          type="button"
-          onClick={() => setShowDocumentosModal(true)}
-          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
-        >
-          <FileSpreadsheet className="w-4 h-4" />
-          Anexar Documentos
-        </button>
       </div>
 
       {/* FAB flutuante — mesma ação do hero, sempre alcançável mesmo depois
@@ -1851,12 +1838,6 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
           (selectedIds.length > 0 ? selectedIds.length : pendentesCount || totalNomes) * precoUnitario
         )}
         onConfirm={handleConfirmEnvio}
-      />
-
-      <AnexarDocumentosModal
-        isOpen={showDocumentosModal}
-        onClose={() => setShowDocumentosModal(false)}
-        onConcluido={loadDocumentosStatus}
       />
 
       {activeSubmissao && (
