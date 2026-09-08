@@ -33,7 +33,12 @@ import type {
   AutomacaoConfig,
   TipoNotificacao,
   EventoNoticia,
+  RegistroOrgaoStatus,
+  NadaConstaEmissao,
+  OrgaoBureau,
 } from '../domain/types.js';
+import { ORGAOS_BUREAU } from '../domain/types.js';
+import { getNadaConstaProvider } from '../integrations/nadaconsta/index.js';
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
 import { maskDocument } from '../lib/masking/documentMasker.js';
 import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
@@ -1300,6 +1305,25 @@ async function transitionStatus(
 
     await tx.update(schema.registros).set(campos).where(eq(schema.registros.id, registroId));
 
+    // Ao protocolar, cria a linha de status pendente pra cada órgão (I3: é
+    // detalhe suplementar do registro, não um 9º ProcessStatus) — só uma vez,
+    // então não recria se o registro já passou por aqui antes (ex.: reprotocolo).
+    if (novoStatus === 'protocolado') {
+      const existentes = await tx.select().from(schema.registroOrgaos).where(eq(schema.registroOrgaos.registroId, registroId));
+      if (existentes.length === 0) {
+        await tx.insert(schema.registroOrgaos).values(
+          ORGAOS_BUREAU.map((orgao) => ({
+            id: novoId('rorg'),
+            tenantId: atual.tenantId,
+            registroId,
+            orgao,
+            status: 'pendente',
+            createdAt: now,
+          })),
+        );
+      }
+    }
+
     await tx.insert(schema.processEvents).values({
       id: processEvent.id,
       tenantId: processEvent.tenant_id,
@@ -1329,6 +1353,136 @@ async function transitionStatus(
 
     return { registro: registroDeLinha({ ...atual, ...campos }), event: processEvent };
   });
+}
+
+function registroOrgaoDeLinha(r: typeof schema.registroOrgaos.$inferSelect): RegistroOrgaoStatus {
+  return {
+    id: r.id,
+    tenant_id: r.tenantId,
+    registro_id: r.registroId,
+    orgao: r.orgao as OrgaoBureau,
+    status: r.status as RegistroOrgaoStatus['status'],
+    baixado_em: r.baixadoEm,
+    created_at: r.createdAt,
+  };
+}
+
+function nadaConstaDeLinha(n: typeof schema.nadaConstaEmissoes.$inferSelect): NadaConstaEmissao {
+  return {
+    id: n.id,
+    tenant_id: n.tenantId,
+    registro_id: n.registroId,
+    associado_id: n.associadoId,
+    protocolo_consulta: n.protocoloConsulta,
+    documento_base64: n.documentoBase64,
+    mime_type: n.mimeType,
+    emitido_em: n.emitidoEm,
+  };
+}
+
+/** Status por órgão de todos os registros de um parceiro (ou de todos, se
+ * chamado sem parceiroId — visão admin), usado no popup "Ver nomes". */
+async function getStatusOrgaosPorParceiro(parceiroId?: string): Promise<Record<string, RegistroOrgaoStatus[]>> {
+  const registrosIds = parceiroId
+    ? (await db().select({ id: schema.registros.id }).from(schema.registros).where(eq(schema.registros.parceiroId, parceiroId))).map((r) => r.id)
+    : null;
+
+  const linhas = registrosIds
+    ? registrosIds.length === 0
+      ? []
+      : await db().select().from(schema.registroOrgaos).where(inArray(schema.registroOrgaos.registroId, registrosIds))
+    : await db().select().from(schema.registroOrgaos);
+
+  const porRegistro: Record<string, RegistroOrgaoStatus[]> = {};
+  for (const linha of linhas) {
+    const item = registroOrgaoDeLinha(linha);
+    (porRegistro[item.registro_id] ??= []).push(item);
+  }
+  return porRegistro;
+}
+
+/** Emissões de nada consta de todos os registros de um parceiro (ou de todos, se admin). */
+async function getNadaConstaPorParceiro(parceiroId?: string): Promise<Record<string, NadaConstaEmissao>> {
+  const registrosIds = parceiroId
+    ? (await db().select({ id: schema.registros.id }).from(schema.registros).where(eq(schema.registros.parceiroId, parceiroId))).map((r) => r.id)
+    : null;
+
+  const linhas = registrosIds
+    ? registrosIds.length === 0
+      ? []
+      : await db().select().from(schema.nadaConstaEmissoes).where(inArray(schema.nadaConstaEmissoes.registroId, registrosIds))
+    : await db().select().from(schema.nadaConstaEmissoes);
+
+  const porRegistro: Record<string, NadaConstaEmissao> = {};
+  for (const linha of linhas) {
+    const item = nadaConstaDeLinha(linha);
+    porRegistro[item.registro_id] = item;
+  }
+  return porRegistro;
+}
+
+/** Gera e grava a certidão de nada consta (mock) pra um registro — chamado
+ * automaticamente assim que o último órgão dá baixa. */
+async function emitirNadaConsta(registroId: string): Promise<NadaConstaEmissao> {
+  const [reg] = await db().select().from(schema.registros).where(eq(schema.registros.id, registroId));
+  if (!reg) throw new Error('Registro não localizado.');
+
+  const [existente] = await db().select().from(schema.nadaConstaEmissoes).where(eq(schema.nadaConstaEmissoes.registroId, registroId));
+  if (existente) return nadaConstaDeLinha(existente);
+
+  const resultado = await getNadaConstaProvider().emitir({
+    nome: reg.nome,
+    cpfCnpj: reg.cpfCnpj,
+    registroId: reg.id,
+  });
+
+  const novo = {
+    id: novoId('nc'),
+    tenantId: reg.tenantId,
+    registroId: reg.id,
+    associadoId: reg.associadoId,
+    protocoloConsulta: resultado.protocoloConsulta,
+    documentoBase64: resultado.documentoBase64,
+    mimeType: resultado.mimeType,
+    emitidoEm: resultado.emitidoEm.toISOString(),
+  };
+  await db().insert(schema.nadaConstaEmissoes).values(novo);
+  return nadaConstaDeLinha(novo as typeof schema.nadaConstaEmissoes.$inferSelect);
+}
+
+/** Admin marca um órgão como baixado pra um registro protocolado. Quando o
+ * último dos 5 órgãos fica baixado, transiciona o registro inteiro pra
+ * "baixado" (I2: gera ProcessEvent, transição já prevista na máquina de
+ * estados) e emite o nada consta automaticamente. */
+async function marcarOrgaoBaixado(
+  registroId: string,
+  orgao: OrgaoBureau,
+  atorUserId: string,
+): Promise<{ orgaos: RegistroOrgaoStatus[]; registroFoiBaixado: boolean }> {
+  if (!ORGAOS_BUREAU.includes(orgao)) throw new Error(`Órgão inválido: "${orgao}".`);
+
+  const [reg] = await db().select().from(schema.registros).where(eq(schema.registros.id, registroId));
+  if (!reg) throw new Error('Registro não localizado.');
+  if (reg.processStatus !== 'protocolado') {
+    throw new Error('Só é possível registrar baixa de órgão em registros protocolados.');
+  }
+
+  const now = new Date().toISOString();
+  await db()
+    .update(schema.registroOrgaos)
+    .set({ status: 'baixado', baixadoEm: now })
+    .where(and(eq(schema.registroOrgaos.registroId, registroId), eq(schema.registroOrgaos.orgao, orgao)));
+
+  const linhas = await db().select().from(schema.registroOrgaos).where(eq(schema.registroOrgaos.registroId, registroId));
+  const orgaos = linhas.map(registroOrgaoDeLinha);
+  const todosBaixados = orgaos.length === ORGAOS_BUREAU.length && orgaos.every((o) => o.status === 'baixado');
+
+  if (todosBaixados) {
+    await transitionStatus(registroId, 'baixado', 'Todos os órgãos deram baixa', atorUserId, 'system');
+    await emitirNadaConsta(registroId);
+  }
+
+  return { orgaos, registroFoiBaixado: todosBaixados };
 }
 
 /** Revelação de documento sob clique, com registro de auditoria obrigatório (I6). */
@@ -2402,6 +2556,9 @@ export const serverStore = {
   addContrato,
   deleteContrato,
   getComprovante,
+  getStatusOrgaosPorParceiro,
+  getNadaConstaPorParceiro,
+  marcarOrgaoBaixado,
   getEventosNoticias,
   createEventoNoticia,
   updateEventoNoticia,

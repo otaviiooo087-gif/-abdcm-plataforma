@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Registro, Lote } from '../../domain/types.js';
-import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
-import { Download, Search, Calendar, Eye, EyeOff, FileText, ExternalLink, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Registro, Lote, RegistroOrgaoStatus, NadaConstaEmissao, ORGAOS_BUREAU, ORGAO_BUREAU_LABEL } from '../../domain/types.js';
+import { StatusDocumentos } from '../../lib/documentos/index.js';
+import { Download, Search, Calendar, Eye, BadgeCheck } from 'lucide-react';
+import { NomesDaListaModal } from './NomesDaListaModal.js';
 
 interface ListaEnviada {
   id: string;
@@ -18,11 +19,6 @@ interface MinhasListasViewProps {
   submissoes: ListaEnviada[];
   documentosStatus: Record<string, StatusDocumentos>;
 }
-
-// Órgãos de proteção ao crédito — cada nome mostra os 5, "baixado" quando o
-// registro já foi baixado, "pendente" enquanto isso não acontece (não temos
-// status por órgão individualmente, só o agregado do registro).
-const ORGAOS = ['Serasa', 'Boa Vista', 'SPC', 'Cenprot BR', 'Cenprot SP'];
 
 // Fase do PROCESSO (jurídico/protocolo) da lista — diferente do status de
 // pagamento, que já aparece na aba Enviar Limpa Nome. Pega a fase mais
@@ -56,9 +52,22 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
   const [selectedFase, setSelectedFase] = useState('todos');
   const [dataDe, setDataDe] = useState('');
   const [dataAte, setDataAte] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [docsAbertoParaRegistro, setDocsAbertoParaRegistro] = useState<string | null>(null);
+  const [modalSubmissaoId, setModalSubmissaoId] = useState<string | null>(null);
   const [baixandoDoc, setBaixandoDoc] = useState<string | null>(null);
+  const [statusOrgaos, setStatusOrgaos] = useState<Record<string, RegistroOrgaoStatus[]>>({});
+  const [nadaConsta, setNadaConsta] = useState<Record<string, NadaConstaEmissao>>({});
+
+  useEffect(() => {
+    fetch('/api/registro-orgaos')
+      .then((res) => (res.ok ? res.json() : {}))
+      .then(setStatusOrgaos)
+      .catch(() => setStatusOrgaos({}));
+
+    fetch('/api/nada-consta')
+      .then((res) => (res.ok ? res.json() : {}))
+      .then(setNadaConsta)
+      .catch(() => setNadaConsta({}));
+  }, []);
 
   const loteDaSubmissao = (sub: ListaEnviada) => lotes.find((l) => l.id === sub.lote_id);
   const registrosDaSubmissao = (subId: string) => registros.filter((r) => r.submissao_id === subId);
@@ -244,9 +253,13 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
             const lote = loteDaSubmissao(sub);
             const protocolo = lote?.referencia_protocolo || lote?.numero_processo || '—';
             const nomesDaLista = registrosDaSubmissao(sub.id);
-            const isExpanded = expandedId === sub.id;
             const formattedDate = new Date(sub.submetido_em).toLocaleDateString('pt-BR');
             const fase = calcularFase(sub, nomesDaLista, lote);
+
+            const protocolados = nomesDaLista.filter((r) => statusOrgaos[r.id]);
+            const orgaoBaixadoParaTodos = (orgao: string) =>
+              protocolados.length > 0 && protocolados.every((r) => statusOrgaos[r.id]?.find((o) => o.orgao === orgao)?.status === 'baixado');
+            const todosNadaConstaProntos = nomesDaLista.length > 0 && nomesDaLista.every((r) => nadaConsta[r.id]);
 
             return (
               <div key={sub.id} className="bg-white rounded-xl border border-slate-200 shadow-2xs p-4 flex flex-col gap-3">
@@ -267,102 +280,58 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
                 </div>
 
                 <div className="grid grid-cols-5 gap-1 text-center pt-1">
-                  {ORGAOS.map((orgao) => (
+                  {ORGAOS_BUREAU.map((orgao) => (
                     <div key={orgao} className="flex flex-col items-center gap-1">
-                      {getBureauPill(fase === 'fase2' || fase === 'concluida')}
-                      <span className="text-[8px] text-slate-400 leading-tight">{orgao}</span>
+                      {getBureauPill(orgaoBaixadoParaTodos(orgao))}
+                      <span className="text-[8px] text-slate-400 leading-tight">{ORGAO_BUREAU_LABEL[orgao]}</span>
                     </div>
                   ))}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setExpandedId(isExpanded ? null : sub.id);
-                    setDocsAbertoParaRegistro(null);
-                  }}
-                  className="w-full pt-2.5 border-t border-slate-100 flex items-center justify-center gap-1.5 text-xs font-bold text-[#148296] hover:text-[#0f6b7c] cursor-pointer transition-colors"
-                >
-                  {isExpanded ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  {isExpanded ? 'Ocultar nomes' : 'Ver nomes anexados'}
-                </button>
-
-                {isExpanded && (
-                  <div className="space-y-1.5 max-h-72 overflow-y-auto -mx-1 px-1">
-                    {nomesDaLista.length === 0 ? (
-                      <p className="text-[11px] text-slate-400 text-center py-3">
-                        Nenhum nome encontrado nesta lista.
-                      </p>
-                    ) : (
-                      nomesDaLista.map((reg) => {
-                        const docsAbertos = docsAbertoParaRegistro === reg.id;
-                        const statusDocs = documentosStatus[reg.associado_id];
-                        const esperados = documentosEsperados(reg.tipo_documento);
-
-                        return (
-                          <div key={reg.id} className="bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <p className="text-xs font-semibold text-slate-800 truncate">{reg.nome}</p>
-                                <p className="text-[10px] font-mono text-slate-500">{reg.cpf_cnpj}</p>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <span className="text-[9px] font-mono text-slate-400 flex items-center gap-1">
-                                  <FileText className="w-2.5 h-2.5" />
-                                  {reg.protocol_code || '—'}
-                                </span>
-                                <button
-                                  type="button"
-                                  title="Ver documentos do associado"
-                                  onClick={() => setDocsAbertoParaRegistro(docsAbertos ? null : reg.id)}
-                                  className={`p-1 rounded cursor-pointer transition-colors ${
-                                    docsAbertos ? 'bg-[#148296]/10 text-[#148296]' : 'text-slate-400 hover:text-[#148296] hover:bg-[#148296]/10'
-                                  }`}
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-
-                            {docsAbertos && (
-                              <div className="mt-2 pt-2 border-t border-slate-200 space-y-1">
-                                {esperados.map((doc) => {
-                                  const disponivel = Boolean(statusDocs?.[doc.tipo]);
-                                  const chave = `${reg.associado_id}:${doc.tipo}`;
-                                  return (
-                                    <button
-                                      key={doc.tipo}
-                                      type="button"
-                                      disabled={!disponivel || baixandoDoc === chave}
-                                      onClick={() => handleAbrirDocumento(reg.associado_id, doc.tipo)}
-                                      className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-[11px] font-semibold cursor-pointer transition-colors ${
-                                        disponivel
-                                          ? 'bg-white border border-[#148296]/30 text-[#148296] hover:bg-[#148296]/5'
-                                          : 'bg-white border border-slate-200 text-slate-300 cursor-not-allowed'
-                                      }`}
-                                    >
-                                      <span>{doc.label}</span>
-                                      {disponivel ? (
-                                        <ExternalLink className="w-3 h-3" />
-                                      ) : (
-                                        <X className="w-3 h-3" />
-                                      )}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
+                {todosNadaConstaProntos && (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-700">
+                    <BadgeCheck className="w-3.5 h-3.5 shrink-0" />
+                    Seus nada consta estão disponíveis
                   </div>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => setModalSubmissaoId(sub.id)}
+                  className="w-full pt-2.5 border-t border-slate-100 flex items-center justify-center gap-1.5 text-xs font-bold text-[#148296] hover:text-[#0f6b7c] cursor-pointer transition-colors"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  Ver nomes anexados
+                </button>
               </div>
             );
           })}
         </div>
       )}
+
+      <NomesDaListaModal
+        isOpen={modalSubmissaoId !== null}
+        onClose={() => setModalSubmissaoId(null)}
+        submissao={ordenadas.find((s) => s.id === modalSubmissaoId) || null}
+        lote={modalSubmissaoId ? loteDaSubmissao(ordenadas.find((s) => s.id === modalSubmissaoId)!) : undefined}
+        registros={modalSubmissaoId ? registrosDaSubmissao(modalSubmissaoId) : []}
+        faseLabel={
+          modalSubmissaoId
+            ? FASE_LABEL[
+                calcularFase(
+                  ordenadas.find((s) => s.id === modalSubmissaoId)!,
+                  registrosDaSubmissao(modalSubmissaoId),
+                  loteDaSubmissao(ordenadas.find((s) => s.id === modalSubmissaoId)!),
+                )
+              ]
+            : FASE_LABEL.inicial
+        }
+        documentosStatus={documentosStatus}
+        statusOrgaos={statusOrgaos}
+        nadaConsta={nadaConsta}
+        onAbrirDocumento={handleAbrirDocumento}
+        baixandoDoc={baixandoDoc}
+      />
     </div>
   );
 };

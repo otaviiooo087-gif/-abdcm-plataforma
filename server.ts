@@ -16,7 +16,7 @@ import { pixProviderConfigurado } from './src/integrations/pix/index';
 import { whatsAppProviderConfigurado } from './src/integrations/whatsapp/index';
 import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integrations/storage/index';
 import { ocrProviderConfigurado } from './src/integrations/ocr/index';
-import type { Registro } from './src/domain/types';
+import type { Registro, OrgaoBureau } from './src/domain/types';
 import { promises as fs } from 'node:fs';
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -954,6 +954,40 @@ async function startServer() {
     const session = serverStore.getSession();
     const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
     res.json(await serverStore.getDocumentosStatus(parceiroId));
+  });
+
+  // Status por órgão (birô) de cada registro protocolado — popup "Ver
+  // nomes anexados" em Minhas Listas.
+  app.get('/api/registro-orgaos', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+    res.json(await serverStore.getStatusOrgaosPorParceiro(parceiroId));
+  });
+
+  // Nada consta emitido automaticamente quando todos os órgãos dão baixa.
+  app.get('/api/nada-consta', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+    res.json(await serverStore.getNadaConstaPorParceiro(parceiroId));
+  });
+
+  // Admin registra a baixa de um órgão específico pra um registro
+  // protocolado. Quando o 5º órgão baixa, o registro vira "baixado"
+  // automaticamente e o nada consta é emitido sozinho.
+  app.post('/api/registros/:id/orgaos/:orgao/baixar', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM registra baixa de órgão.' });
+        return;
+      }
+      const { id, orgao } = req.params;
+      const resultado = await serverStore.marcarOrgaoBaixado(id, orgao as OrgaoBureau, session.id);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao registrar baixa';
+      res.status(400).json({ error: msg });
+    }
   });
 
   app.get('/api/associados/:id/documentos/:tipo/download', async (req: Request, res: Response) => {

@@ -4,6 +4,7 @@ import { StatusBadge } from '../StatusBadge.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { UserSession } from '../../server/mockData.js';
 import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
+import { OrgaosBaixaModal } from './OrgaosBaixaModal.js';
 import {
   Layers,
   Search,
@@ -63,6 +64,7 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
   const [copiedProcesso, setCopiedProcesso] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBatchModal, setShowBatchModal] = useState(false);
+  const [orgaosModalRegistro, setOrgaosModalRegistro] = useState<Registro | null>(null);
   const [batchTargetStatus, setBatchTargetStatus] = useState<string>('protocolado');
   const [batchMotivo, setBatchMotivo] = useState('');
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
@@ -1132,6 +1134,16 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                           >
                             <ArrowRightLeft className="w-4 h-4" />
                           </button>
+                          {reg.process_status === 'protocolado' && (
+                            <button
+                              type="button"
+                              onClick={() => setOrgaosModalRegistro(reg)}
+                              className="p-1 text-slate-400 hover:text-[#148296] hover:bg-slate-100 rounded-md cursor-pointer transition-colors"
+                              title="Registrar baixa por órgão"
+                            >
+                              <ShieldCheck className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1585,6 +1597,14 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {orgaosModalRegistro && (
+        <OrgaosBaixaModal
+          registro={orgaosModalRegistro}
+          onClose={() => setOrgaosModalRegistro(null)}
+          onRefreshData={onRefreshData}
+        />
       )}
     </div>
   );

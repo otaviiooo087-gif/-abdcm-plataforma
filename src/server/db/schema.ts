@@ -215,6 +215,27 @@ export const usuarios = pgTable('usuarios', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
+export const registroOrgaos = pgTable('registro_orgaos', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  registroId: text('registro_id').notNull(),
+  orgao: text('orgao').notNull(),
+  status: text('status').notNull().default('pendente'),
+  baixadoEm: timestamp('baixado_em', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const nadaConstaEmissoes = pgTable('nada_consta_emissoes', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  registroId: text('registro_id').notNull(),
+  associadoId: text('associado_id').notNull(),
+  protocoloConsulta: text('protocolo_consulta').notNull(),
+  documentoBase64: text('documento_base64').notNull(),
+  mimeType: text('mime_type').notNull(),
+  emitidoEm: timestamp('emitido_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
 export const eventosNoticias = pgTable('eventos_noticias', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull(),

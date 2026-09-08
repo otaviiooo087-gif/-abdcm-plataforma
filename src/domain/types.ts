@@ -267,6 +267,45 @@ export interface AutomacaoConfig {
   atualizado_em: string;
 }
 
+// Status por órgão (birô de crédito) de um registro já protocolado — camada
+// suplementar de detalhe, não substitui nem cria um 9º ProcessStatus (I3 do
+// CLAUDE.md continua valendo: só os 10 valores fechados). Um registro só
+// tem linhas aqui a partir do momento em que vira "protocolado"; quando
+// todos os órgãos ficam "baixado", o registro inteiro transiciona pra
+// "baixado" (transição já prevista na máquina de estados) e o nada consta
+// é emitido automaticamente.
+export const ORGAOS_BUREAU = ['serasa', 'boa_vista', 'spc', 'cenprot_br', 'cenprot_sp'] as const;
+export type OrgaoBureau = (typeof ORGAOS_BUREAU)[number];
+
+export const ORGAO_BUREAU_LABEL: Record<OrgaoBureau, string> = {
+  serasa: 'Serasa',
+  boa_vista: 'Boa Vista',
+  spc: 'SPC Brasil',
+  cenprot_br: 'Cenprot BR',
+  cenprot_sp: 'Cenprot SP',
+};
+
+export interface RegistroOrgaoStatus {
+  id: string;
+  tenant_id: string;
+  registro_id: string;
+  orgao: OrgaoBureau;
+  status: 'pendente' | 'baixado';
+  baixado_em?: string | null;
+  created_at: string;
+}
+
+export interface NadaConstaEmissao {
+  id: string;
+  tenant_id: string;
+  registro_id: string;
+  associado_id: string;
+  protocolo_consulta: string;
+  documento_base64: string;
+  mime_type: string;
+  emitido_em: string;
+}
+
 export type TipoEventoNoticia = 'evento' | 'noticia';
 
 export interface EventoNoticia {
