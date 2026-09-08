@@ -182,11 +182,22 @@ transição válida **e** para cada proibida.
 > somem a cada restart) — isso foi **corrigido em seguida**: o protótipo agora fala com Postgres
 > de verdade via Drizzle (`src/server/db/`, `src/server/store.ts`), com as mesmas migrations e
 > seed do padrão anterior. Ou seja: **a stack ainda diverge da decidida abaixo** (é Vite+Express,
-> não Next.js; não tem os 6 papéis autenticados — a troca de papel continua sem login real; não
-> usa Zod nem pg-boss ainda), mas a persistência (I2 ProcessEvent, I9 tenant_id) já está
-> garantida de novo. Uma sessão futura que for evoluir isto: o schema vive em
+> não Next.js; não usa Zod nem pg-boss ainda), mas a persistência (I2 ProcessEvent, I9 tenant_id)
+> já está garantida de novo. Uma sessão futura que for evoluir isto: o schema vive em
 > `src/server/db/schema.ts` + `src/server/db/migrations/`, espelhando 1:1 os tipos de
 > `src/domain/types.ts`.
+>
+> **Login real (setembro/2026):** `parceiro` e `administrador` já têm login de verdade — tabela
+> `usuarios` (`src/server/db/schema.ts`), senha com hash scrypt (`src/server/auth/password.ts`),
+> sessão por cookie assinado HMAC (`src/server/auth/session.ts`, sem tabela de sessão) resolvida
+> por request via `AsyncLocalStorage` (`src/server/auth/context.ts`) — não mais a variável global
+> `activeUser` sozinha. `store.getSession()` prioriza a sessão real do cookie e cai no `activeUser`
+> de demonstração quando não há uma. Os outros 4 papéis (`conciliador`, `operador`, `suporte`,
+> `financeiro`) continuam só no troca-de-papel de demonstração (`/api/auth/switch-role`), sem conta
+> própria — decisão explícita do usuário, não lacuna esquecida. Tela em
+> `src/components/LoginPage.tsx`, com aba de cadastro (só parceiro — conta de administrador é
+> provisionada via `npm run db:criar-conta`, não tem cadastro aberto) e um link "modo demonstração"
+> que preserva o seletor de papel antigo pra quem não tem conta.
 
 **Decidida para a versão real (ainda não implementada neste snapshot):**
 

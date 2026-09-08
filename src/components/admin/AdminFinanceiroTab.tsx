@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Submissao, Registro, Lote } from '../../domain/types.js';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Submissao, Registro, Lote, ConfiguracaoEmpresa } from '../../domain/types.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { UserSession } from '../../server/mockData.js';
 import {
@@ -50,7 +50,15 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
   const [showReprovarModal, setShowReprovarModal] = useState(false);
   const [reprovarMotivo, setReprovarMotivo] = useState('');
 
-  const chavePixOficial = 'financeiro@abdcm.org.br';
+  const [empresa, setEmpresa] = useState<ConfiguracaoEmpresa | null>(null);
+  useEffect(() => {
+    fetch('/api/config/empresa')
+      .then((res) => (res.ok ? res.json() : null))
+      .then(setEmpresa)
+      .catch(() => setEmpresa(null));
+  }, []);
+
+  const chavePixOficial = empresa?.banco_pix_chave || 'Configure em Configurações > Empresa';
 
   const handleCopyPix = () => {
     navigator.clipboard.writeText(chavePixOficial);
@@ -96,6 +104,29 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
       return true;
     });
   }, [submissoes, statusFilter, searchTerm]);
+
+  const [carregandoComprovanteId, setCarregandoComprovanteId] = useState<string | null>(null);
+
+  const handleVerComprovante = async (subId: string) => {
+    setCarregandoComprovanteId(subId);
+    try {
+      const res = await fetch(`/api/submissoes/${subId}/comprovante`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao carregar comprovante');
+      const janela = window.open();
+      if (janela) {
+        janela.document.write(
+          data.mimeType?.startsWith('image/')
+            ? `<img src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="max-width:100%" />`
+            : `<embed src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="width:100%;height:100vh" />`,
+        );
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao carregar comprovante');
+    } finally {
+      setCarregandoComprovanteId(null);
+    }
+  };
 
   // Aprovar Submissão / Conciliação
   const handleAprovar = async (subId: string) => {
@@ -250,7 +281,11 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
           </div>
           <div className="mt-2">
             <p className="text-2xl font-black text-[#148296]">{totalNomesPagos} associados</p>
-            <p className="text-[11px] text-slate-500 mt-0.5">R$ 55,00 por nome na Ação Coletiva</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {lotes.find((l) => l.status === 'aberto')
+                ? `${formatCurrencyBRL(lotes.find((l) => l.status === 'aberto')!.preco_por_nome)} por nome no lote vigente`
+                : 'Preço definido por lote'}
+            </p>
           </div>
         </div>
 
@@ -290,7 +325,16 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Razão Social: <strong>Associação Brasileira de Defesa do Consumidor e do Trabalhador</strong> • CNPJ: 45.892.124/0001-90
+                {empresa?.razao_social ? (
+                  <>
+                    Razão Social: <strong>{empresa.razao_social}</strong>
+                    {empresa.cnpj && <> • CNPJ: {empresa.cnpj}</>}
+                  </>
+                ) : (
+                  <span className="text-amber-600 font-semibold">
+                    Dados da empresa ainda não configurados — preencha em Configurações &gt; Empresa
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -316,8 +360,12 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
             </div>
 
             <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-              <span className="text-[10px] font-bold uppercase text-slate-400 mr-2">Bancos:</span>
-              <span className="font-semibold text-slate-800">Santander (033) & Nu Pagamentos</span>
+              <span className="text-[10px] font-bold uppercase text-slate-400 mr-2">Banco:</span>
+              <span className="font-semibold text-slate-800">
+                {empresa?.banco_nome
+                  ? `${empresa.banco_nome}${empresa.banco_agencia ? ` — Ag. ${empresa.banco_agencia}` : ''}${empresa.banco_conta ? ` / Cc. ${empresa.banco_conta}` : ''}`
+                  : 'Não configurado'}
+              </span>
             </div>
           </div>
         </div>
@@ -480,11 +528,25 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
                     </span>
                   </div>
 
-                  {/* Card que simula o comprovante bancário recebido */}
+                  {/* Resumo da submissão — os campos abaixo são os dados reais da
+                      submissão; o comprovante em si (a imagem/PDF que o parceiro
+                      anexou) é aberto pelo botão "Ver Comprovante Anexado". */}
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs space-y-3 font-mono">
                     <div className="flex items-center justify-between pb-2 border-b border-slate-200 text-[11px] font-sans">
-                      <span className="font-bold text-slate-700">COMPROVANTE DE TRANSAÇÃO PIX / TED</span>
-                      <span className="text-slate-500">Autenticação: 8F2A.3391.EE40</span>
+                      <span className="font-bold text-slate-700">RESUMO DA SUBMISSÃO</span>
+                      {selectedSubmissao.tem_comprovante ? (
+                        <button
+                          type="button"
+                          disabled={carregandoComprovanteId === selectedSubmissao.id}
+                          onClick={() => handleVerComprovante(selectedSubmissao.id)}
+                          className="text-[#148296] font-bold hover:underline cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          {carregandoComprovanteId === selectedSubmissao.id ? 'Abrindo...' : 'Ver Comprovante Anexado'}
+                        </button>
+                      ) : (
+                        <span className="text-slate-400">Nenhum comprovante anexado</span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-[11px]">

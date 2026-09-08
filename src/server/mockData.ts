@@ -24,6 +24,9 @@ export interface UserSession {
   role: UserRole;
   parceiro_id?: string;
   partner_code?: string;
+  // true quando a sessão veio de login real (cookie assinado), não da troca
+  // de papel de demonstração — controla se a UI mostra "Sair" ou o seletor.
+  autenticado?: boolean;
 }
 
 export const SEED_USERS: UserSession[] = [

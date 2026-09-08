@@ -32,13 +32,30 @@ import type {
   NotificacaoEnviada,
   AutomacaoConfig,
   TipoNotificacao,
+  EventoNoticia,
+  RegistroOrgaoStatus,
+  NadaConstaEmissao,
+  OrgaoBureau,
+  ConfiguracaoEmpresa,
+  MarketingCronogramaDia,
+  MarketingDisparo,
+  MarketingGrupoConfig,
+  MensagemExtra,
+  ChamadaConfig,
+  ChamadaLog,
 } from '../domain/types.js';
+import { getLigacaoProvider } from '../integrations/ligacao/index.js';
+import { ORGAOS_BUREAU } from '../domain/types.js';
+import { getNadaConstaProvider } from '../integrations/nadaconsta/index.js';
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
 import { maskDocument } from '../lib/masking/documentMasker.js';
 import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
 import { getStorageProvider, storageProviderConfigurado } from '../integrations/storage/index.js';
 import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integrations/whatsapp/index.js';
 import { getOcrProvider } from '../integrations/ocr/index.js';
+import { hashPassword, verifyPassword } from './auth/password.js';
+import { criarTokenSessao } from './auth/session.js';
+import { sessaoRealAtual } from './auth/context.js';
 
 export { ABDCM_TENANT_ID } from './mockData.js';
 export type { UserSession } from './mockData.js';
@@ -56,6 +73,7 @@ type ProcessEventRow = typeof schema.processEvents.$inferSelect;
 type AuditLogRow = typeof schema.auditLog.$inferSelect;
 type ContestacaoRow = typeof schema.contestacoes.$inferSelect;
 type ServicoRow = typeof schema.servicos.$inferSelect;
+type EventoNoticiaRow = typeof schema.eventosNoticias.$inferSelect;
 type ContratoRow = typeof schema.contratos.$inferSelect;
 type PixCobrancaRow = typeof schema.pixCobrancas.$inferSelect;
 type NotificacaoEnviadaRow = typeof schema.notificacoesEnviadas.$inferSelect;
@@ -208,10 +226,30 @@ function servicoDeLinha(s: ServicoRow): Servico {
     nome: s.nome,
     descricao: s.descricao,
     preco: s.preco,
+    custo: s.custo,
     prazo_dias: s.prazoDias,
     usa_listas: s.usaListas,
     ativo: s.ativo,
+    foto_url: s.fotoUrl,
+    link_redirecionamento: s.linkRedirecionamento,
     created_at: s.createdAt,
+  };
+}
+
+function eventoNoticiaDeLinha(e: EventoNoticiaRow): EventoNoticia {
+  return {
+    id: e.id,
+    tenant_id: e.tenantId,
+    tipo: e.tipo as EventoNoticia['tipo'],
+    titulo: e.titulo,
+    descricao: e.descricao,
+    categoria: e.categoria,
+    imagem_url: e.imagemUrl,
+    link_externo: e.linkExterno,
+    data_evento: e.dataEvento,
+    ativo: e.ativo,
+    criado_por_user_id: e.criadoPorUserId,
+    created_at: e.createdAt,
   };
 }
 
@@ -219,6 +257,7 @@ function contratoDeLinha(c: ContratoRow): Contrato {
   return {
     id: c.id,
     tenant_id: c.tenantId,
+    titulo: c.titulo,
     nome_arquivo: c.nomeArquivo,
     mime_type: c.mimeType,
     conteudo_base64: c.conteudoBase64,
@@ -280,8 +319,13 @@ function novoId(prefixo: string): string {
 
 let activeUser: UserSession = SEED_USERS[0]!;
 
+/**
+ * Sessão real (cookie assinado, resolvida em authContext no server.ts) tem
+ * precedência sobre o `activeUser` de demonstração. Sem cookie válido (ou
+ * pra quem ainda não tem conta real), cai no comportamento de sempre.
+ */
 function getSession(): UserSession {
-  return activeUser;
+  return sessaoRealAtual() ?? activeUser;
 }
 
 function setRole(role: UserRole): UserSession {
@@ -294,6 +338,179 @@ function setRole(role: UserRole): UserSession {
   };
   activeUser = user;
   return user;
+}
+
+// ---------------------------------------------------------------------
+// Login real (parceiro e administrador) — contas com senha, tabela
+// `usuarios`. Os outros 4 papéis continuam só na troca de papel acima.
+// ---------------------------------------------------------------------
+
+type UsuarioRow = typeof schema.usuarios.$inferSelect;
+
+function usuarioParaSessao(u: UsuarioRow): UserSession {
+  return {
+    id: u.id,
+    tenant_id: u.tenantId,
+    nome: u.nome,
+    email: u.email,
+    role: u.role as UserRole,
+    parceiro_id: u.parceiroId ?? undefined,
+    partner_code: u.partnerCode ?? undefined,
+    autenticado: true,
+  };
+}
+
+async function buscarUsuarioPorId(id: string): Promise<UserSession | null> {
+  const [row] = await db().select().from(schema.usuarios).where(eq(schema.usuarios.id, id)).limit(1);
+  if (!row || !row.ativo) return null;
+  return usuarioParaSessao(row);
+}
+
+/** Lista de contas de login reais (parceiro/administrador) — Controle de Acesso. */
+async function listarUsuarios(): Promise<
+  { id: string; nome: string; email: string; role: UserRole; parceiro_id: string | null; ativo: boolean; created_at: string }[]
+> {
+  const linhas = await db()
+    .select()
+    .from(schema.usuarios)
+    .where(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.usuarios.createdAt));
+  return linhas.map((u) => ({
+    id: u.id,
+    nome: u.nome,
+    email: u.email,
+    role: u.role as UserRole,
+    parceiro_id: u.parceiroId,
+    ativo: u.ativo,
+    created_at: u.createdAt,
+  }));
+}
+
+/** Ativa/desativa uma conta de login (revoga acesso sem apagar o histórico). */
+async function setUsuarioAtivo(usuarioId: string, ativo: boolean, atorUserId: string): Promise<void> {
+  const [atual] = await db().select().from(schema.usuarios).where(eq(schema.usuarios.id, usuarioId));
+  if (!atual) throw new Error('Conta não encontrada.');
+
+  await db().update(schema.usuarios).set({ ativo }).where(eq(schema.usuarios.id, usuarioId));
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: atual.tenantId,
+    atorUserId,
+    acao: ativo ? 'CONTA_REATIVADA' : 'CONTA_DESATIVADA',
+    entidadeTipo: 'usuarios',
+    entidadeId: usuarioId,
+    antes: { ativo: atual.ativo },
+    depois: { ativo },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: new Date().toISOString(),
+  });
+}
+
+async function autenticarUsuario(
+  email: string,
+  senha: string,
+): Promise<{ sessao: UserSession; token: string } | { erro: string }> {
+  const emailNormalizado = email.trim().toLowerCase();
+  if (!emailNormalizado || !senha) return { erro: 'E-mail e senha são obrigatórios.' };
+
+  const linhas = await db().select().from(schema.usuarios).where(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID));
+  const row = linhas.find((u) => u.email.toLowerCase() === emailNormalizado);
+
+  // Mensagem genérica em qualquer caso de falha — não revela se o e-mail existe.
+  if (!row || !row.ativo || !verifyPassword(senha, row.senhaHash)) {
+    return { erro: 'E-mail ou senha inválidos.' };
+  }
+
+  const sessao = usuarioParaSessao(row);
+  const token = criarTokenSessao(row.id);
+  return { sessao, token };
+}
+
+async function registrarParceiro(input: {
+  nome: string;
+  email: string;
+  senha: string;
+}): Promise<{ sessao: UserSession; token: string } | { erro: string }> {
+  const nome = input.nome.trim();
+  const email = input.email.trim().toLowerCase();
+  const senha = input.senha;
+
+  if (!nome) return { erro: 'Informe o nome ou razão social.' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { erro: 'E-mail inválido.' };
+  if (senha.length < 8) return { erro: 'A senha precisa ter pelo menos 8 caracteres.' };
+
+  const existentes = await db().select().from(schema.usuarios).where(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID));
+  if (existentes.some((u) => u.email.toLowerCase() === email)) {
+    return { erro: 'Já existe uma conta com este e-mail.' };
+  }
+
+  const id = novoId('usr-parceiro');
+  const parceiroId = novoId('parc');
+  const partnerCode = `PARC-${id.slice(-8).toUpperCase()}`;
+  const now = new Date().toISOString();
+
+  const [row] = await db()
+    .insert(schema.usuarios)
+    .values({
+      id,
+      tenantId: ABDCM_TENANT_ID,
+      nome,
+      email,
+      senhaHash: hashPassword(senha),
+      role: 'parceiro',
+      parceiroId,
+      partnerCode,
+      ativo: true,
+      createdAt: now,
+    })
+    .returning();
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: ABDCM_TENANT_ID,
+    atorUserId: id,
+    acao: 'PARCEIRO_CADASTRADO',
+    entidadeTipo: 'usuarios',
+    entidadeId: id,
+    depois: { nome, email, parceiro_id: parceiroId },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Cadastro-Parceiro',
+    ocorridoEm: now,
+  });
+
+  const sessao = usuarioParaSessao(row!);
+  const token = criarTokenSessao(row!.id);
+  return { sessao, token };
+}
+
+async function alterarSenha(
+  usuarioId: string,
+  senhaAtual: string,
+  novaSenha: string,
+): Promise<{ ok: true } | { erro: string }> {
+  if (novaSenha.length < 8) return { erro: 'A nova senha precisa ter pelo menos 8 caracteres.' };
+
+  const [row] = await db().select().from(schema.usuarios).where(eq(schema.usuarios.id, usuarioId)).limit(1);
+  if (!row || !row.ativo) return { erro: 'Conta não encontrada.' };
+  if (!verifyPassword(senhaAtual, row.senhaHash)) return { erro: 'Senha atual incorreta.' };
+
+  await db().update(schema.usuarios).set({ senhaHash: hashPassword(novaSenha) }).where(eq(schema.usuarios.id, usuarioId));
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: row.tenantId,
+    atorUserId: usuarioId,
+    acao: 'SENHA_ALTERADA',
+    entidadeTipo: 'usuarios',
+    entidadeId: usuarioId,
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Meu-Perfil',
+    ocorridoEm: new Date().toISOString(),
+  });
+
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------
@@ -323,6 +540,78 @@ async function getSubmissoes(): Promise<Submissao[]> {
 async function getProcessEvents(): Promise<ProcessEvent[]> {
   const linhas = await db().select().from(schema.processEvents);
   return linhas.map(eventoDeLinha);
+}
+
+/** Métricas extras do Dashboard — tudo calculado de dado real (nada
+ * inventado): parceiros novos, ranking de parceiros por volume enviado, e
+ * ranking de lotes/Ações Coletivas por volume (o "ranking de serviços"
+ * pedido — hoje só a Ação Limpa Nome tem venda de verdade rastreada; o
+ * catálogo de Serviços ainda não tem fluxo de compra próprio). */
+async function getDashboardExtra(): Promise<{
+  parceirosNovos30dias: number;
+  parceirosTotal: number;
+  rankingParceiros: { parceiro_id: string; nome: string; nomes_enviados: number; valor_pago: number }[];
+  rankingLotes: { lote_id: string; nome: string; nomes_enviados: number; valor_pago: number }[];
+}> {
+  const usuariosParceiro = await db()
+    .select()
+    .from(schema.usuarios)
+    .where(and(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID), eq(schema.usuarios.role, 'parceiro')));
+
+  const trintaDiasAtras = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const parceirosNovos30dias = usuariosParceiro.filter((u) => new Date(u.createdAt) >= trintaDiasAtras).length;
+
+  const nomeParceiro = new Map<string, string>();
+  for (const u of usuariosParceiro) if (u.parceiroId) nomeParceiro.set(u.parceiroId, u.nome);
+  for (const s of SEED_USERS) {
+    if (s.role === 'parceiro' && s.parceiro_id && !nomeParceiro.has(s.parceiro_id)) {
+      nomeParceiro.set(s.parceiro_id, s.nome);
+    }
+  }
+
+  const todosRegistros = await db().select().from(schema.registros);
+  const todasSubmissoes = await db().select().from(schema.submissoes);
+  const enviadoOuAlem = new Set(['enviado', 'aguardando_pagamento', 'pago', 'aguardando_protocolo', 'protocolado', 'baixado', 'recusado']);
+
+  const porParceiro = new Map<string, { nomes: number; valor: number }>();
+  const porLote = new Map<string, { nomes: number; valor: number }>();
+  for (const r of todosRegistros) {
+    if (!enviadoOuAlem.has(r.processStatus)) continue;
+    const p = porParceiro.get(r.parceiroId) ?? { nomes: 0, valor: 0 };
+    p.nomes += 1;
+    porParceiro.set(r.parceiroId, p);
+    const l = porLote.get(r.loteId) ?? { nomes: 0, valor: 0 };
+    l.nomes += 1;
+    porLote.set(r.loteId, l);
+  }
+  for (const s of todasSubmissoes) {
+    if (s.paymentStatus !== 'pago') continue;
+    const p = porParceiro.get(s.parceiroId) ?? { nomes: 0, valor: 0 };
+    p.valor += s.valorTotal;
+    porParceiro.set(s.parceiroId, p);
+    const l = porLote.get(s.loteId) ?? { nomes: 0, valor: 0 };
+    l.valor += s.valorTotal;
+    porLote.set(s.loteId, l);
+  }
+
+  const rankingParceiros = [...porParceiro.entries()]
+    .map(([parceiro_id, v]) => ({
+      parceiro_id,
+      nome: nomeParceiro.get(parceiro_id) || `Parceiro ${parceiro_id.slice(0, 12)}`,
+      nomes_enviados: v.nomes,
+      valor_pago: v.valor,
+    }))
+    .sort((a, b) => b.nomes_enviados - a.nomes_enviados);
+
+  const lotesRows = await db().select({ id: schema.lotes.id, nome: schema.lotes.nome }).from(schema.lotes);
+  const nomeLote = new Map(lotesRows.map((l) => [l.id, l.nome]));
+  const rankingLotes = [...porLote.entries()]
+    .map(([lote_id, v]) => ({ lote_id, nome: nomeLote.get(lote_id) || lote_id, nomes_enviados: v.nomes, valor_pago: v.valor }))
+    .sort((a, b) => b.valor_pago - a.valor_pago);
+
+  const parceirosTotal = new Set([...nomeParceiro.keys(), ...porParceiro.keys()]).size;
+
+  return { parceirosNovos30dias, parceirosTotal, rankingParceiros, rankingLotes };
 }
 
 async function getAuditLogs(): Promise<AuditLog[]> {
@@ -692,6 +981,21 @@ async function attachComprovante(
     const [submissaoRow] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
     return submissaoDeLinha(submissaoRow!);
   });
+}
+
+/** Comprovante de pagamento de uma submissão — só quem pode ver a
+ * submissão (o próprio parceiro dono, ou a equipe ABDCM) chega até aqui;
+ * a checagem de quem pode chamar isto é feita na rota (server.ts). */
+async function getComprovante(
+  submissaoId: string,
+): Promise<{ parceiroId: string; comprovanteBase64: string; mimeType: string } | null> {
+  const [sub] = await db().select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
+  if (!sub || !sub.comprovanteBase64) return null;
+  return {
+    parceiroId: sub.parceiroId,
+    comprovanteBase64: sub.comprovanteBase64,
+    mimeType: sub.comprovanteMime || 'application/octet-stream',
+  };
 }
 
 /** Cancela submissão pendente e libera os registros de volta para "pendente". */
@@ -1124,6 +1428,25 @@ async function transitionStatus(
 
     await tx.update(schema.registros).set(campos).where(eq(schema.registros.id, registroId));
 
+    // Ao protocolar, cria a linha de status pendente pra cada órgão (I3: é
+    // detalhe suplementar do registro, não um 9º ProcessStatus) — só uma vez,
+    // então não recria se o registro já passou por aqui antes (ex.: reprotocolo).
+    if (novoStatus === 'protocolado') {
+      const existentes = await tx.select().from(schema.registroOrgaos).where(eq(schema.registroOrgaos.registroId, registroId));
+      if (existentes.length === 0) {
+        await tx.insert(schema.registroOrgaos).values(
+          ORGAOS_BUREAU.map((orgao) => ({
+            id: novoId('rorg'),
+            tenantId: atual.tenantId,
+            registroId,
+            orgao,
+            status: 'pendente',
+            createdAt: now,
+          })),
+        );
+      }
+    }
+
     await tx.insert(schema.processEvents).values({
       id: processEvent.id,
       tenantId: processEvent.tenant_id,
@@ -1153,6 +1476,136 @@ async function transitionStatus(
 
     return { registro: registroDeLinha({ ...atual, ...campos }), event: processEvent };
   });
+}
+
+function registroOrgaoDeLinha(r: typeof schema.registroOrgaos.$inferSelect): RegistroOrgaoStatus {
+  return {
+    id: r.id,
+    tenant_id: r.tenantId,
+    registro_id: r.registroId,
+    orgao: r.orgao as OrgaoBureau,
+    status: r.status as RegistroOrgaoStatus['status'],
+    baixado_em: r.baixadoEm,
+    created_at: r.createdAt,
+  };
+}
+
+function nadaConstaDeLinha(n: typeof schema.nadaConstaEmissoes.$inferSelect): NadaConstaEmissao {
+  return {
+    id: n.id,
+    tenant_id: n.tenantId,
+    registro_id: n.registroId,
+    associado_id: n.associadoId,
+    protocolo_consulta: n.protocoloConsulta,
+    documento_base64: n.documentoBase64,
+    mime_type: n.mimeType,
+    emitido_em: n.emitidoEm,
+  };
+}
+
+/** Status por órgão de todos os registros de um parceiro (ou de todos, se
+ * chamado sem parceiroId — visão admin), usado no popup "Ver nomes". */
+async function getStatusOrgaosPorParceiro(parceiroId?: string): Promise<Record<string, RegistroOrgaoStatus[]>> {
+  const registrosIds = parceiroId
+    ? (await db().select({ id: schema.registros.id }).from(schema.registros).where(eq(schema.registros.parceiroId, parceiroId))).map((r) => r.id)
+    : null;
+
+  const linhas = registrosIds
+    ? registrosIds.length === 0
+      ? []
+      : await db().select().from(schema.registroOrgaos).where(inArray(schema.registroOrgaos.registroId, registrosIds))
+    : await db().select().from(schema.registroOrgaos);
+
+  const porRegistro: Record<string, RegistroOrgaoStatus[]> = {};
+  for (const linha of linhas) {
+    const item = registroOrgaoDeLinha(linha);
+    (porRegistro[item.registro_id] ??= []).push(item);
+  }
+  return porRegistro;
+}
+
+/** Emissões de nada consta de todos os registros de um parceiro (ou de todos, se admin). */
+async function getNadaConstaPorParceiro(parceiroId?: string): Promise<Record<string, NadaConstaEmissao>> {
+  const registrosIds = parceiroId
+    ? (await db().select({ id: schema.registros.id }).from(schema.registros).where(eq(schema.registros.parceiroId, parceiroId))).map((r) => r.id)
+    : null;
+
+  const linhas = registrosIds
+    ? registrosIds.length === 0
+      ? []
+      : await db().select().from(schema.nadaConstaEmissoes).where(inArray(schema.nadaConstaEmissoes.registroId, registrosIds))
+    : await db().select().from(schema.nadaConstaEmissoes);
+
+  const porRegistro: Record<string, NadaConstaEmissao> = {};
+  for (const linha of linhas) {
+    const item = nadaConstaDeLinha(linha);
+    porRegistro[item.registro_id] = item;
+  }
+  return porRegistro;
+}
+
+/** Gera e grava a certidão de nada consta (mock) pra um registro — chamado
+ * automaticamente assim que o último órgão dá baixa. */
+async function emitirNadaConsta(registroId: string): Promise<NadaConstaEmissao> {
+  const [reg] = await db().select().from(schema.registros).where(eq(schema.registros.id, registroId));
+  if (!reg) throw new Error('Registro não localizado.');
+
+  const [existente] = await db().select().from(schema.nadaConstaEmissoes).where(eq(schema.nadaConstaEmissoes.registroId, registroId));
+  if (existente) return nadaConstaDeLinha(existente);
+
+  const resultado = await getNadaConstaProvider().emitir({
+    nome: reg.nome,
+    cpfCnpj: reg.cpfCnpj,
+    registroId: reg.id,
+  });
+
+  const novo = {
+    id: novoId('nc'),
+    tenantId: reg.tenantId,
+    registroId: reg.id,
+    associadoId: reg.associadoId,
+    protocoloConsulta: resultado.protocoloConsulta,
+    documentoBase64: resultado.documentoBase64,
+    mimeType: resultado.mimeType,
+    emitidoEm: resultado.emitidoEm.toISOString(),
+  };
+  await db().insert(schema.nadaConstaEmissoes).values(novo);
+  return nadaConstaDeLinha(novo as typeof schema.nadaConstaEmissoes.$inferSelect);
+}
+
+/** Admin marca um órgão como baixado pra um registro protocolado. Quando o
+ * último dos 5 órgãos fica baixado, transiciona o registro inteiro pra
+ * "baixado" (I2: gera ProcessEvent, transição já prevista na máquina de
+ * estados) e emite o nada consta automaticamente. */
+async function marcarOrgaoBaixado(
+  registroId: string,
+  orgao: OrgaoBureau,
+  atorUserId: string,
+): Promise<{ orgaos: RegistroOrgaoStatus[]; registroFoiBaixado: boolean }> {
+  if (!ORGAOS_BUREAU.includes(orgao)) throw new Error(`Órgão inválido: "${orgao}".`);
+
+  const [reg] = await db().select().from(schema.registros).where(eq(schema.registros.id, registroId));
+  if (!reg) throw new Error('Registro não localizado.');
+  if (reg.processStatus !== 'protocolado') {
+    throw new Error('Só é possível registrar baixa de órgão em registros protocolados.');
+  }
+
+  const now = new Date().toISOString();
+  await db()
+    .update(schema.registroOrgaos)
+    .set({ status: 'baixado', baixadoEm: now })
+    .where(and(eq(schema.registroOrgaos.registroId, registroId), eq(schema.registroOrgaos.orgao, orgao)));
+
+  const linhas = await db().select().from(schema.registroOrgaos).where(eq(schema.registroOrgaos.registroId, registroId));
+  const orgaos = linhas.map(registroOrgaoDeLinha);
+  const todosBaixados = orgaos.length === ORGAOS_BUREAU.length && orgaos.every((o) => o.status === 'baixado');
+
+  if (todosBaixados) {
+    await transitionStatus(registroId, 'baixado', 'Todos os órgãos deram baixa', atorUserId, 'system');
+    await emitirNadaConsta(registroId);
+  }
+
+  return { orgaos, registroFoiBaixado: todosBaixados };
 }
 
 /** Revelação de documento sob clique, com registro de auditoria obrigatório (I6). */
@@ -1244,7 +1697,17 @@ async function updateAssociadoStatus(
 async function updateLote(
   id: string,
   atorUserId: string,
-  campos: { closesAt?: string; nome?: string },
+  campos: {
+    closesAt?: string;
+    nome?: string;
+    numeroProcesso?: string;
+    varaTribunal?: string;
+    juiz?: string;
+    referenciaProtocolo?: string;
+    dataProtocolo?: string;
+    dataDistribuicao?: string;
+    liminarStatus?: string;
+  },
 ): Promise<Lote> {
   const [atual] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, id));
   if (!atual) throw new Error('Lote não encontrado.');
@@ -1252,6 +1715,13 @@ async function updateLote(
   const patch: Partial<LoteRow> = {};
   if (campos.closesAt) patch.closesAt = campos.closesAt;
   if (campos.nome) patch.nome = campos.nome;
+  if (campos.numeroProcesso !== undefined) patch.numeroProcesso = campos.numeroProcesso || null;
+  if (campos.varaTribunal !== undefined) patch.varaTribunal = campos.varaTribunal || null;
+  if (campos.juiz !== undefined) patch.juiz = campos.juiz || null;
+  if (campos.referenciaProtocolo !== undefined) patch.referenciaProtocolo = campos.referenciaProtocolo || null;
+  if (campos.dataProtocolo !== undefined) patch.dataProtocolo = campos.dataProtocolo || null;
+  if (campos.dataDistribuicao !== undefined) patch.dataDistribuicao = campos.dataDistribuicao || null;
+  if (campos.liminarStatus !== undefined) patch.liminarStatus = campos.liminarStatus || null;
 
   await db().update(schema.lotes).set(patch).where(eq(schema.lotes.id, id));
 
@@ -1405,11 +1875,17 @@ async function createServico(data: {
   nome: string;
   descricao?: string;
   preco: number;
+  custo?: number;
   prazoDias: number;
   usaListas: boolean;
+  fotoUrl?: string;
+  linkRedirecionamento?: string;
 }): Promise<Servico> {
   if (!data.nome?.trim()) throw new Error('Nome do serviço é obrigatório.');
   if (!Number.isInteger(data.preco) || data.preco < 0) throw new Error('Preço deve ser um valor inteiro em centavos.');
+  if (data.custo !== undefined && (!Number.isInteger(data.custo) || data.custo < 0)) {
+    throw new Error('Custo deve ser um valor inteiro em centavos.');
+  }
   if (!Number.isInteger(data.prazoDias) || data.prazoDias < 0) throw new Error('Prazo deve ser um número inteiro de dias.');
 
   const novo = {
@@ -1418,9 +1894,12 @@ async function createServico(data: {
     nome: data.nome.trim(),
     descricao: data.descricao?.trim() || null,
     preco: data.preco,
+    custo: data.custo ?? 0,
     prazoDias: data.prazoDias,
     usaListas: data.usaListas,
     ativo: true,
+    fotoUrl: data.fotoUrl?.trim() || null,
+    linkRedirecionamento: data.linkRedirecionamento?.trim() || null,
     createdAt: new Date().toISOString(),
   };
   await db().insert(schema.servicos).values(novo);
@@ -1429,7 +1908,17 @@ async function createServico(data: {
 
 async function updateServico(
   id: string,
-  data: Partial<{ nome: string; descricao: string | null; preco: number; prazoDias: number; usaListas: boolean; ativo: boolean }>,
+  data: Partial<{
+    nome: string;
+    descricao: string | null;
+    preco: number;
+    custo: number;
+    prazoDias: number;
+    usaListas: boolean;
+    ativo: boolean;
+    fotoUrl: string | null;
+    linkRedirecionamento: string | null;
+  }>,
 ): Promise<Servico> {
   const [atual] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, id));
   if (!atual) throw new Error('Serviço não encontrado.');
@@ -1438,9 +1927,12 @@ async function updateServico(
   if (data.nome !== undefined) patch.nome = data.nome;
   if (data.descricao !== undefined) patch.descricao = data.descricao;
   if (data.preco !== undefined) patch.preco = data.preco;
+  if (data.custo !== undefined) patch.custo = data.custo;
   if (data.prazoDias !== undefined) patch.prazoDias = data.prazoDias;
   if (data.usaListas !== undefined) patch.usaListas = data.usaListas;
   if (data.ativo !== undefined) patch.ativo = data.ativo;
+  if (data.fotoUrl !== undefined) patch.fotoUrl = data.fotoUrl;
+  if (data.linkRedirecionamento !== undefined) patch.linkRedirecionamento = data.linkRedirecionamento;
 
   await db().update(schema.servicos).set(patch).where(eq(schema.servicos.id, id));
   return servicoDeLinha({ ...atual, ...patch });
@@ -1480,33 +1972,400 @@ async function deleteServico(
 }
 
 // ---------------------------------------------------------------------
-// Contrato-modelo (o admin anexa; associados/parceiros só leem)
+// Marketing de serviços — aba Serviços > Marketing (disparo manual,
+// cronograma semanal automático e o robô de grupos, este último MOCK).
 // ---------------------------------------------------------------------
 
-async function getContrato(): Promise<Contrato | null> {
-  const linhas = await db().select().from(schema.contratos).where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID));
-  const linha = linhas[0];
-  return linha ? contratoDeLinha(linha) : null;
+function associadosComWhatsapp() {
+  return db()
+    .select()
+    .from(schema.associados)
+    .where(and(eq(schema.associados.tenantId, ABDCM_TENANT_ID), eq(schema.associados.statusFiliacao, 'ativo')));
 }
 
-/** Substitui o contrato vigente (mantém só um por tenant). */
-async function setContrato(data: { nomeArquivo: string; mimeType: string; conteudoBase64: string }): Promise<Contrato> {
-  if (!data.nomeArquivo || !data.conteudoBase64) {
-    throw new Error('Arquivo do contrato é obrigatório.');
+/** Dispara uma mensagem de marketing pro WhatsApp de todos os associados ativos. Real — via WhatsAppProvider. */
+async function dispararMarketingServico(
+  servicoId: string,
+  mensagem: string,
+  origem: 'manual' | 'automatico',
+  atorUserId?: string,
+): Promise<{ enviados: number; falhas: number }> {
+  const [servico] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, servicoId));
+  if (!servico) throw new Error('Serviço não encontrado.');
+  if (!mensagem?.trim()) throw new Error('Mensagem é obrigatória.');
+
+  const associadosDb = await associadosComWhatsapp();
+  let enviados = 0;
+  let falhas = 0;
+  for (const a of associadosDb) {
+    if (!a.telefoneWhatsapp) continue;
+    try {
+      await getWhatsAppProvider().enviarTexto({ telefone: a.telefoneWhatsapp, texto: mensagem.trim() });
+      enviados += 1;
+    } catch (err) {
+      falhas += 1;
+      console.error(`[marketing] falha ao enviar para ${a.telefoneWhatsapp}:`, err);
+    }
   }
-  return db().transaction(async (tx) => {
-    await tx.delete(schema.contratos).where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID));
-    const novo = {
-      id: novoId('contrato'),
-      tenantId: ABDCM_TENANT_ID,
-      nomeArquivo: data.nomeArquivo,
-      mimeType: data.mimeType,
-      conteudoBase64: data.conteudoBase64,
-      atualizadoEm: new Date().toISOString(),
-    };
-    await tx.insert(schema.contratos).values(novo);
-    return contratoDeLinha(novo as ContratoRow);
+
+  await db().insert(schema.marketingDisparos).values({
+    id: novoId('mkt'),
+    tenantId: ABDCM_TENANT_ID,
+    servicoId,
+    origem,
+    mensagem: mensagem.trim(),
+    quantidadeDestinatarios: enviados,
+    disparadoPorUserId: atorUserId ?? null,
+    disparadoEm: new Date().toISOString(),
   });
+
+  if (atorUserId) {
+    await db().insert(schema.auditLog).values({
+      id: novoId('audit'),
+      tenantId: ABDCM_TENANT_ID,
+      atorUserId,
+      acao: 'MARKETING_DISPARO_MANUAL',
+      entidadeTipo: 'servicos',
+      entidadeId: servicoId,
+      depois: { mensagem: mensagem.trim(), enviados, falhas },
+      ip: '127.0.0.1',
+      userAgent: 'ABDCM-Admin-Console',
+      ocorridoEm: new Date().toISOString(),
+    });
+  }
+
+  return { enviados, falhas };
+}
+
+async function getMarketingLog(): Promise<MarketingDisparo[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.marketingDisparos)
+    .where(eq(schema.marketingDisparos.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.marketingDisparos.disparadoEm))
+    .limit(50);
+  return linhas.map((d) => ({
+    id: d.id,
+    tenant_id: d.tenantId,
+    servico_id: d.servicoId,
+    origem: d.origem as 'manual' | 'automatico',
+    mensagem: d.mensagem,
+    quantidade_destinatarios: d.quantidadeDestinatarios,
+    disparado_por_user_id: d.disparadoPorUserId,
+    disparado_em: d.disparadoEm,
+  }));
+}
+
+async function getMarketingCronograma(): Promise<MarketingCronogramaDia[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.marketingCronograma)
+    .where(eq(schema.marketingCronograma.tenantId, ABDCM_TENANT_ID));
+  return linhas
+    .map((l) => ({
+      id: l.id,
+      tenant_id: l.tenantId,
+      dia_semana: l.diaSemana,
+      servico_id: l.servicoId,
+      ativo: l.ativo,
+      atualizado_em: l.atualizadoEm,
+    }))
+    .sort((a, b) => a.dia_semana - b.dia_semana);
+}
+
+/** Define o serviço em destaque de um dia da semana (0=domingo..6=sábado). Upsert manual — sem constraint nomeada no Drizzle pra usar onConflictDoUpdate aqui. */
+async function setMarketingCronogramaDia(
+  diaSemana: number,
+  servicoId: string | null,
+  ativo: boolean,
+): Promise<MarketingCronogramaDia> {
+  if (!Number.isInteger(diaSemana) || diaSemana < 0 || diaSemana > 6) {
+    throw new Error('Dia da semana inválido (use 0 a 6).');
+  }
+  const [existente] = await db()
+    .select()
+    .from(schema.marketingCronograma)
+    .where(and(eq(schema.marketingCronograma.tenantId, ABDCM_TENANT_ID), eq(schema.marketingCronograma.diaSemana, diaSemana)));
+
+  const agora = new Date().toISOString();
+  if (existente) {
+    await db()
+      .update(schema.marketingCronograma)
+      .set({ servicoId, ativo, atualizadoEm: agora })
+      .where(eq(schema.marketingCronograma.id, existente.id));
+    return { id: existente.id, tenant_id: ABDCM_TENANT_ID, dia_semana: diaSemana, servico_id: servicoId, ativo, atualizado_em: agora };
+  }
+  const id = novoId('mktcron');
+  await db().insert(schema.marketingCronograma).values({
+    id,
+    tenantId: ABDCM_TENANT_ID,
+    diaSemana,
+    servicoId,
+    ativo,
+    atualizadoEm: agora,
+  });
+  return { id, tenant_id: ABDCM_TENANT_ID, dia_semana: diaSemana, servico_id: servicoId, ativo, atualizado_em: agora };
+}
+
+/**
+ * Roda pelo agendador já existente (rodarAutomacoes, a cada 15min). Dispara
+ * o serviço em destaque do dia da semana atual — no máximo uma vez por dia
+ * por serviço (checa marketing_disparos de hoje antes de mandar de novo).
+ */
+async function rodarMarketingCronogramaDoDia(): Promise<{ disparado: boolean; servicoNome?: string; enviados?: number }> {
+  const diaSemana = new Date().getDay();
+  const [linha] = await db()
+    .select()
+    .from(schema.marketingCronograma)
+    .where(and(eq(schema.marketingCronograma.tenantId, ABDCM_TENANT_ID), eq(schema.marketingCronograma.diaSemana, diaSemana)));
+  if (!linha?.ativo || !linha.servicoId) return { disparado: false };
+
+  const inicioHoje = new Date();
+  inicioHoje.setHours(0, 0, 0, 0);
+  const disparosDoServico = await db()
+    .select({ origem: schema.marketingDisparos.origem, disparadoEm: schema.marketingDisparos.disparadoEm })
+    .from(schema.marketingDisparos)
+    .where(eq(schema.marketingDisparos.servicoId, linha.servicoId));
+  const jaDisparouHoje = disparosDoServico.some((d) => d.origem === 'automatico' && new Date(d.disparadoEm) >= inicioHoje);
+  if (jaDisparouHoje) return { disparado: false };
+
+  const [servico] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, linha.servicoId));
+  if (!servico || !servico.ativo) return { disparado: false };
+
+  const mensagem =
+    `${servico.nome} — Aqui é da ABDCM! Hoje é dia de dar aquele empurrão: ${servico.descricao || 'confira as condições especiais deste serviço'}. ` +
+    `Quer saber mais? Fale com o parceiro que cuidou da sua filiação.`;
+  const { enviados } = await dispararMarketingServico(linha.servicoId, mensagem, 'automatico');
+  return { disparado: true, servicoNome: servico.nome, enviados };
+}
+
+// MOCK — nenhum provedor de grupo/enquete de WhatsApp está contratado
+// (CLAUDE.md seção 8: mock primeiro, provider real só quando contratado).
+async function getMarketingGrupoConfig(): Promise<MarketingGrupoConfig> {
+  const [linha] = await db().select().from(schema.marketingGrupoConfig).where(eq(schema.marketingGrupoConfig.tenantId, ABDCM_TENANT_ID));
+  if (linha) {
+    return {
+      tenant_id: linha.tenantId,
+      nome_grupo: linha.nomeGrupo,
+      aviso_lista_ativo: linha.avisoListaAtivo,
+      marketing_ativo: linha.marketingAtivo,
+      enquetes_ativo: linha.enquetesAtivo,
+      atualizado_em: linha.atualizadoEm,
+    };
+  }
+  return {
+    tenant_id: ABDCM_TENANT_ID,
+    nome_grupo: '',
+    aviso_lista_ativo: false,
+    marketing_ativo: false,
+    enquetes_ativo: false,
+    atualizado_em: new Date().toISOString(),
+  };
+}
+
+async function setMarketingGrupoConfig(data: Partial<{
+  nomeGrupo: string;
+  avisoListaAtivo: boolean;
+  marketingAtivo: boolean;
+  enquetesAtivo: boolean;
+}>): Promise<MarketingGrupoConfig> {
+  const atual = await getMarketingGrupoConfig();
+  const agora = new Date().toISOString();
+  const novo = {
+    tenantId: ABDCM_TENANT_ID,
+    nomeGrupo: data.nomeGrupo ?? atual.nome_grupo,
+    avisoListaAtivo: data.avisoListaAtivo ?? atual.aviso_lista_ativo,
+    marketingAtivo: data.marketingAtivo ?? atual.marketing_ativo,
+    enquetesAtivo: data.enquetesAtivo ?? atual.enquetes_ativo,
+    atualizadoEm: agora,
+  };
+  await db()
+    .insert(schema.marketingGrupoConfig)
+    .values(novo)
+    .onConflictDoUpdate({ target: schema.marketingGrupoConfig.tenantId, set: novo });
+  return {
+    tenant_id: novo.tenantId,
+    nome_grupo: novo.nomeGrupo,
+    aviso_lista_ativo: novo.avisoListaAtivo,
+    marketing_ativo: novo.marketingAtivo,
+    enquetes_ativo: novo.enquetesAtivo,
+    atualizado_em: novo.atualizadoEm,
+  };
+}
+
+// ---------------------------------------------------------------------
+// Eventos e Notícias — CMS simples controlado pelo admin
+// ---------------------------------------------------------------------
+
+async function getEventosNoticias(): Promise<EventoNoticia[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.eventosNoticias)
+    .where(eq(schema.eventosNoticias.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.eventosNoticias.createdAt));
+  return linhas.map(eventoNoticiaDeLinha);
+}
+
+async function createEventoNoticia(data: {
+  tipo: string;
+  titulo: string;
+  descricao: string;
+  categoria: string;
+  imagemUrl?: string;
+  linkExterno?: string;
+  dataEvento?: string;
+  atorUserId: string;
+}): Promise<EventoNoticia> {
+  if (data.tipo !== 'evento' && data.tipo !== 'noticia' && data.tipo !== 'anuncio') {
+    throw new Error('Tipo inválido (use "evento", "noticia" ou "anuncio").');
+  }
+  if (!data.titulo?.trim()) throw new Error('Título é obrigatório.');
+  if (!data.descricao?.trim()) throw new Error('Descrição é obrigatória.');
+  if (!data.categoria?.trim()) throw new Error('Categoria é obrigatória.');
+
+  const novo = {
+    id: novoId('evt'),
+    tenantId: ABDCM_TENANT_ID,
+    tipo: data.tipo,
+    titulo: data.titulo.trim(),
+    descricao: data.descricao.trim(),
+    categoria: data.categoria.trim(),
+    imagemUrl: data.imagemUrl?.trim() || null,
+    linkExterno: data.linkExterno?.trim() || null,
+    dataEvento: data.dataEvento || null,
+    ativo: true,
+    criadoPorUserId: data.atorUserId,
+    createdAt: new Date().toISOString(),
+  };
+  await db().insert(schema.eventosNoticias).values(novo);
+  return eventoNoticiaDeLinha(novo as EventoNoticiaRow);
+}
+
+async function updateEventoNoticia(id: string, data: Partial<{ ativo: boolean }>): Promise<EventoNoticia> {
+  const [atual] = await db()
+    .select()
+    .from(schema.eventosNoticias)
+    .where(and(eq(schema.eventosNoticias.id, id), eq(schema.eventosNoticias.tenantId, ABDCM_TENANT_ID)));
+  if (!atual) throw new Error('Registro não encontrado.');
+
+  const patch: Partial<EventoNoticiaRow> = {};
+  if (data.ativo !== undefined) patch.ativo = data.ativo;
+
+  await db().update(schema.eventosNoticias).set(patch).where(eq(schema.eventosNoticias.id, id));
+  return eventoNoticiaDeLinha({ ...atual, ...patch });
+}
+
+async function deleteEventoNoticia(id: string): Promise<void> {
+  await db()
+    .delete(schema.eventosNoticias)
+    .where(and(eq(schema.eventosNoticias.id, id), eq(schema.eventosNoticias.tenantId, ABDCM_TENANT_ID)));
+}
+
+// ---------------------------------------------------------------------
+// Dados cadastrais da empresa (empresa, banco, OAB) — uma linha por tenant
+// ---------------------------------------------------------------------
+
+async function getConfiguracaoEmpresa(): Promise<ConfiguracaoEmpresa> {
+  const [linha] = await db().select().from(schema.configuracaoEmpresa).where(eq(schema.configuracaoEmpresa.tenantId, ABDCM_TENANT_ID));
+  if (linha) {
+    return {
+      tenant_id: linha.tenantId,
+      razao_social: linha.razaoSocial,
+      cnpj: linha.cnpj,
+      endereco: linha.endereco,
+      telefone: linha.telefone,
+      email: linha.email,
+      banco_nome: linha.bancoNome,
+      banco_agencia: linha.bancoAgencia,
+      banco_conta: linha.bancoConta,
+      banco_pix_chave: linha.bancoPixChave,
+      oab_numero: linha.oabNumero,
+      oab_uf: linha.oabUf,
+      atualizado_em: linha.atualizadoEm,
+    };
+  }
+  const now = new Date().toISOString();
+  return {
+    tenant_id: ABDCM_TENANT_ID,
+    razao_social: '',
+    cnpj: '',
+    endereco: '',
+    telefone: '',
+    email: '',
+    banco_nome: '',
+    banco_agencia: '',
+    banco_conta: '',
+    banco_pix_chave: '',
+    oab_numero: '',
+    oab_uf: '',
+    atualizado_em: now,
+  };
+}
+
+async function setConfiguracaoEmpresa(data: Omit<ConfiguracaoEmpresa, 'tenant_id' | 'atualizado_em'>): Promise<ConfiguracaoEmpresa> {
+  const now = new Date().toISOString();
+  const linha = {
+    tenantId: ABDCM_TENANT_ID,
+    razaoSocial: data.razao_social,
+    cnpj: data.cnpj,
+    endereco: data.endereco,
+    telefone: data.telefone,
+    email: data.email,
+    bancoNome: data.banco_nome,
+    bancoAgencia: data.banco_agencia,
+    bancoConta: data.banco_conta,
+    bancoPixChave: data.banco_pix_chave,
+    oabNumero: data.oab_numero,
+    oabUf: data.oab_uf,
+    atualizadoEm: now,
+  };
+  await db()
+    .insert(schema.configuracaoEmpresa)
+    .values(linha)
+    .onConflictDoUpdate({ target: schema.configuracaoEmpresa.tenantId, set: linha });
+  return { ...data, tenant_id: ABDCM_TENANT_ID, atualizado_em: now };
+}
+
+// ---------------------------------------------------------------------
+// Contratos e Documentos Complementares (o admin anexa quantos quiser —
+// ficha associativa modelo, contrato de intermediação etc; associados e
+// parceiros só leem/baixam).
+// ---------------------------------------------------------------------
+
+async function getContratos(): Promise<Contrato[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.contratos)
+    .where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.contratos.atualizadoEm));
+  return linhas.map(contratoDeLinha);
+}
+
+async function addContrato(data: {
+  titulo: string;
+  nomeArquivo: string;
+  mimeType: string;
+  conteudoBase64: string;
+}): Promise<Contrato> {
+  if (!data.titulo.trim()) throw new Error('Título do documento é obrigatório.');
+  if (!data.nomeArquivo || !data.conteudoBase64) {
+    throw new Error('Arquivo do documento é obrigatório.');
+  }
+  const novo = {
+    id: novoId('contrato'),
+    tenantId: ABDCM_TENANT_ID,
+    titulo: data.titulo.trim(),
+    nomeArquivo: data.nomeArquivo,
+    mimeType: data.mimeType,
+    conteudoBase64: data.conteudoBase64,
+    atualizadoEm: new Date().toISOString(),
+  };
+  await db().insert(schema.contratos).values(novo);
+  return contratoDeLinha(novo as ContratoRow);
+}
+
+async function deleteContrato(id: string): Promise<void> {
+  await db().delete(schema.contratos).where(and(eq(schema.contratos.id, id), eq(schema.contratos.tenantId, ABDCM_TENANT_ID)));
 }
 
 // ---------------------------------------------------------------------
@@ -1565,7 +2424,20 @@ export const AUTOMACOES_DISPONIVEIS: Record<
       'Ação Coletiva 124 encerrada! Foram 87 nomes captados. Baixe a documentação completa aqui: https://... (link válido por 7 dias)',
     configPadrao: { numeros: [] },
   },
+  cadastro_associado: {
+    nome: 'Boas-vindas ao se cadastrar',
+    descricao:
+      'Manda uma mensagem de boas-vindas assim que um associado com WhatsApp cadastrado entra no sistema (cadastro individual ou por planilha).',
+    exemplo:
+      'Boa tarde João! Aqui é da ABDCM 👋 Seja muito bem-vindo(a) ao sistema ABDCM! Você agora faz parte da nossa Ação Coletiva Limpa Nome — fica de olho por aqui que a gente avisa assim que a próxima lista abrir pra você anexar seus nomes.',
+    configPadrao: {},
+  },
 };
+
+/** Substitui tokens {saudacao}, {nome} etc. em templates editáveis pelo admin. */
+export function aplicarTemplateMensagem(template: string, tokens: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (match, chave) => tokens[chave] ?? match);
+}
 
 export async function getAutomacoesConfig(): Promise<AutomacaoConfig[]> {
   const linhas = await db().select().from(schema.automacoesConfig).where(eq(schema.automacoesConfig.tenantId, ABDCM_TENANT_ID));
@@ -1628,6 +2500,260 @@ async function getNotificacoesLog(limite = 50): Promise<NotificacaoEnviada[]> {
     .orderBy(desc(schema.notificacoesEnviadas.enviadoEm))
     .limit(limite);
   return linhas.map(notificacaoDeLinha);
+}
+
+// ---------------------------------------------------------------------
+// Mensagens extras por gatilho — aba Automações > "Criar Nova Mensagem"
+// ---------------------------------------------------------------------
+
+function mensagemExtraDeLinha(m: typeof schema.mensagensExtra.$inferSelect): MensagemExtra {
+  return {
+    id: m.id,
+    tenant_id: m.tenantId,
+    gatilho: m.gatilho as TipoNotificacao,
+    nome: m.nome,
+    mensagem: m.mensagem,
+    ativo: m.ativo,
+    created_at: m.createdAt,
+  };
+}
+
+export async function getMensagensExtra(): Promise<MensagemExtra[]> {
+  const linhas = await db().select().from(schema.mensagensExtra).where(eq(schema.mensagensExtra.tenantId, ABDCM_TENANT_ID));
+  return linhas.map(mensagemExtraDeLinha);
+}
+
+async function createMensagemExtra(data: { gatilho: TipoNotificacao; nome: string; mensagem: string }): Promise<MensagemExtra> {
+  if (!(data.gatilho in AUTOMACOES_DISPONIVEIS)) throw new Error('Gatilho inválido.');
+  if (!data.nome?.trim()) throw new Error('Nome é obrigatório.');
+  if (!data.mensagem?.trim()) throw new Error('Mensagem é obrigatória.');
+
+  const novo = {
+    id: novoId('msgx'),
+    tenantId: ABDCM_TENANT_ID,
+    gatilho: data.gatilho,
+    nome: data.nome.trim(),
+    mensagem: data.mensagem.trim(),
+    ativo: true,
+    createdAt: new Date().toISOString(),
+  };
+  await db().insert(schema.mensagensExtra).values(novo);
+  return mensagemExtraDeLinha(novo as typeof schema.mensagensExtra.$inferSelect);
+}
+
+async function updateMensagemExtra(id: string, data: Partial<{ nome: string; mensagem: string; ativo: boolean }>): Promise<MensagemExtra> {
+  const [atual] = await db().select().from(schema.mensagensExtra).where(eq(schema.mensagensExtra.id, id));
+  if (!atual) throw new Error('Mensagem não encontrada.');
+  const patch: Partial<typeof schema.mensagensExtra.$inferSelect> = {};
+  if (data.nome !== undefined) patch.nome = data.nome;
+  if (data.mensagem !== undefined) patch.mensagem = data.mensagem;
+  if (data.ativo !== undefined) patch.ativo = data.ativo;
+  await db().update(schema.mensagensExtra).set(patch).where(eq(schema.mensagensExtra.id, id));
+  return mensagemExtraDeLinha({ ...atual, ...patch });
+}
+
+async function deleteMensagemExtra(id: string): Promise<void> {
+  await db().delete(schema.mensagensExtra).where(eq(schema.mensagensExtra.id, id));
+}
+
+// ---------------------------------------------------------------------
+// Automação de ligação — MOCK (ver migration 0013 / CLAUDE.md seção 8)
+// ---------------------------------------------------------------------
+
+function chamadaConfigDeLinha(c: typeof schema.chamadasConfig.$inferSelect): ChamadaConfig {
+  return {
+    id: c.id,
+    tenant_id: c.tenantId,
+    servico_id: c.servicoId,
+    nome: c.nome,
+    roteiro_abertura: c.roteiroAbertura,
+    roteiro_resposta_sim: c.roteiroRespostaSim,
+    roteiro_resposta_nao: c.roteiroRespostaNao,
+    dias_antes_prazo: c.diasAntesPrazo,
+    ativo: c.ativo,
+    created_at: c.createdAt,
+    updated_at: c.updatedAt,
+  };
+}
+
+function chamadaLogDeLinha(l: typeof schema.chamadasLog.$inferSelect): ChamadaLog {
+  return {
+    id: l.id,
+    tenant_id: l.tenantId,
+    config_id: l.configId,
+    servico_id: l.servicoId,
+    associado_id: l.associadoId,
+    telefone: l.telefone,
+    resultado: l.resultado as ChamadaLog['resultado'],
+    transcricao: l.transcricao,
+    origem: l.origem as ChamadaLog['origem'],
+    criado_em: l.criadoEm,
+  };
+}
+
+async function getChamadasConfig(): Promise<ChamadaConfig[]> {
+  const linhas = await db().select().from(schema.chamadasConfig).where(eq(schema.chamadasConfig.tenantId, ABDCM_TENANT_ID));
+  return linhas.map(chamadaConfigDeLinha);
+}
+
+async function createChamadaConfig(data: {
+  servicoId?: string | null;
+  nome: string;
+  roteiroAbertura: string;
+  roteiroRespostaSim: string;
+  roteiroRespostaNao: string;
+  diasAntesPrazo?: number | null;
+}): Promise<ChamadaConfig> {
+  if (!data.nome?.trim()) throw new Error('Nome é obrigatório.');
+  if (!data.roteiroAbertura?.trim() || !data.roteiroRespostaSim?.trim() || !data.roteiroRespostaNao?.trim()) {
+    throw new Error('Preencha o roteiro de abertura e as duas respostas (sim/não).');
+  }
+  const agora = new Date().toISOString();
+  const novo = {
+    id: novoId('call-cfg'),
+    tenantId: ABDCM_TENANT_ID,
+    servicoId: data.servicoId || null,
+    nome: data.nome.trim(),
+    roteiroAbertura: data.roteiroAbertura.trim(),
+    roteiroRespostaSim: data.roteiroRespostaSim.trim(),
+    roteiroRespostaNao: data.roteiroRespostaNao.trim(),
+    diasAntesPrazo: data.diasAntesPrazo ?? null,
+    ativo: true,
+    createdAt: agora,
+    updatedAt: agora,
+  };
+  await db().insert(schema.chamadasConfig).values(novo);
+  return chamadaConfigDeLinha(novo as typeof schema.chamadasConfig.$inferSelect);
+}
+
+async function updateChamadaConfig(
+  id: string,
+  data: Partial<{
+    nome: string;
+    roteiroAbertura: string;
+    roteiroRespostaSim: string;
+    roteiroRespostaNao: string;
+    diasAntesPrazo: number | null;
+    ativo: boolean;
+  }>,
+): Promise<ChamadaConfig> {
+  const [atual] = await db().select().from(schema.chamadasConfig).where(eq(schema.chamadasConfig.id, id));
+  if (!atual) throw new Error('Configuração de ligação não encontrada.');
+  const patch: Partial<typeof schema.chamadasConfig.$inferSelect> = { updatedAt: new Date().toISOString() };
+  if (data.nome !== undefined) patch.nome = data.nome;
+  if (data.roteiroAbertura !== undefined) patch.roteiroAbertura = data.roteiroAbertura;
+  if (data.roteiroRespostaSim !== undefined) patch.roteiroRespostaSim = data.roteiroRespostaSim;
+  if (data.roteiroRespostaNao !== undefined) patch.roteiroRespostaNao = data.roteiroRespostaNao;
+  if (data.diasAntesPrazo !== undefined) patch.diasAntesPrazo = data.diasAntesPrazo;
+  if (data.ativo !== undefined) patch.ativo = data.ativo;
+  await db().update(schema.chamadasConfig).set(patch).where(eq(schema.chamadasConfig.id, id));
+  return chamadaConfigDeLinha({ ...atual, ...patch });
+}
+
+async function deleteChamadaConfig(id: string): Promise<void> {
+  await db().delete(schema.chamadasConfig).where(eq(schema.chamadasConfig.id, id));
+}
+
+async function getChamadasLog(limite = 50): Promise<ChamadaLog[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.chamadasLog)
+    .where(eq(schema.chamadasLog.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.chamadasLog.criadoEm))
+    .limit(limite);
+  return linhas.map(chamadaLogDeLinha);
+}
+
+/** Testa uma configuração de ligação num telefone qualquer — sempre MOCK, nunca liga de verdade. */
+async function testarChamada(configId: string, telefone: string): Promise<ChamadaLog> {
+  const [config] = await db().select().from(schema.chamadasConfig).where(eq(schema.chamadasConfig.id, configId));
+  if (!config) throw new Error('Configuração de ligação não encontrada.');
+  if (!telefone?.trim()) throw new Error('Telefone é obrigatório.');
+
+  const hora = new Date().getHours();
+  const tokensTeste = {
+    saudacao: hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite',
+    nome: 'Associado Teste',
+    lote: 'Ação Coletiva',
+  };
+  const resultado = await getLigacaoProvider().ligar({
+    telefone: telefone.trim(),
+    roteiro: {
+      abertura: aplicarTemplateMensagem(config.roteiroAbertura, tokensTeste),
+      respostaSim: aplicarTemplateMensagem(config.roteiroRespostaSim, tokensTeste),
+      respostaNao: aplicarTemplateMensagem(config.roteiroRespostaNao, tokensTeste),
+    },
+  });
+
+  const novo = {
+    id: novoId('call-log'),
+    tenantId: ABDCM_TENANT_ID,
+    configId,
+    servicoId: config.servicoId,
+    associadoId: null,
+    telefone: telefone.trim(),
+    resultado: resultado.resultado,
+    transcricao: resultado.transcricao,
+    origem: 'manual' as const,
+    criadoEm: new Date().toISOString(),
+  };
+  await db().insert(schema.chamadasLog).values(novo);
+  return chamadaLogDeLinha(novo as typeof schema.chamadasLog.$inferSelect);
+}
+
+/**
+ * Roda pelo agendador já existente (a cada 15min). Pra cada configuração de
+ * ligação com follow-up configurado (dias_antes_prazo), liga (mock) pra
+ * associados elegíveis do lote vigente quando faltar exatamente esse tanto
+ * de dias pro encerramento — no máximo uma vez por associado por config
+ * (dedup por chamadas_log já registrado pra esse config+telefone).
+ */
+async function rodarFollowUpLigacoes(): Promise<number> {
+  const configs = await db().select().from(schema.chamadasConfig).where(and(eq(schema.chamadasConfig.tenantId, ABDCM_TENANT_ID), eq(schema.chamadasConfig.ativo, true)));
+  let totalLigacoes = 0;
+
+  for (const config of configs) {
+    if (!config.diasAntesPrazo) continue;
+    const lotesAbertos = await db().select().from(schema.lotes).where(eq(schema.lotes.status, 'aberto'));
+
+    for (const lote of lotesAbertos) {
+      const diasParaFechar = Math.ceil((new Date(lote.closesAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      if (diasParaFechar !== config.diasAntesPrazo) continue;
+
+      const associadosDb = await associadosComWhatsapp();
+      for (const associado of associadosDb) {
+        if (!associado.telefoneWhatsapp) continue;
+        const jaLigou = await db()
+          .select({ id: schema.chamadasLog.id })
+          .from(schema.chamadasLog)
+          .where(and(eq(schema.chamadasLog.configId, config.id), eq(schema.chamadasLog.telefone, associado.telefoneWhatsapp)));
+        if (jaLigou.length > 0) continue;
+
+        const resultado = await getLigacaoProvider().ligar({
+          telefone: associado.telefoneWhatsapp,
+          roteiro: {
+            abertura: aplicarTemplateMensagem(config.roteiroAbertura, { nome: associado.nome.split(' ')[0], lote: lote.nome }),
+            respostaSim: aplicarTemplateMensagem(config.roteiroRespostaSim, { nome: associado.nome.split(' ')[0], lote: lote.nome }),
+            respostaNao: aplicarTemplateMensagem(config.roteiroRespostaNao, { nome: associado.nome.split(' ')[0], lote: lote.nome }),
+          },
+        });
+        await db().insert(schema.chamadasLog).values({
+          id: novoId('call-log'),
+          tenantId: ABDCM_TENANT_ID,
+          configId: config.id,
+          servicoId: config.servicoId,
+          associadoId: associado.id,
+          telefone: associado.telefoneWhatsapp,
+          resultado: resultado.resultado,
+          transcricao: resultado.transcricao,
+          origem: 'automatico',
+          criadoEm: new Date().toISOString(),
+        });
+        totalLigacoes++;
+      }
+    }
+  }
+  return totalLigacoes;
 }
 
 // ---------------------------------------------------------------------
@@ -1965,6 +3091,69 @@ async function montarPlanilhaLote(
   return workbook.xlsx.writeBuffer();
 }
 
+function nomeArquivoSeguro(nome: string): string {
+  return nome.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'acao_coletiva';
+}
+
+/** Planilha (xlsx) sob demanda de um lote — não muda status nem gera
+ * pacote, é só o download avulso que o admin pode pedir a qualquer
+ * momento (diferente de encerrarLote, que é uma ação única e destrutiva). */
+async function gerarPlanilhaLoteBuffer(loteId: string): Promise<{ buffer: ExcelJS.Buffer; nomeArquivo: string }> {
+  const [loteRow] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, loteId));
+  if (!loteRow) throw new Error('Ação Coletiva não encontrada.');
+
+  const registrosDoLote = await db().select().from(schema.registros).where(eq(schema.registros.loteId, loteId));
+  const associadoIds = [...new Set(registrosDoLote.map((r) => r.associadoId))];
+  const associadosDoLote =
+    associadoIds.length > 0 ? await db().select().from(schema.associados).where(inArray(schema.associados.id, associadoIds)) : [];
+  const associadosPorId = new Map(associadosDoLote.map((a) => [a.id, a]));
+
+  const buffer = await montarPlanilhaLote(registrosDoLote, associadosPorId);
+  return { buffer, nomeArquivo: `lista_${nomeArquivoSeguro(loteRow.nome)}.xlsx` };
+}
+
+/** ZIP de documentos de um lote, sob demanda — `apenasTipo` filtra só um
+ * tipo (ex.: só ficha_associativa). Mesma lógica de montagem de
+ * encerrarLote, mas sem nenhum efeito colateral (não fecha o lote). */
+async function gerarZipDocumentosLote(
+  loteId: string,
+  apenasTipo?: TipoDocumento,
+): Promise<{ buffer: Buffer; nomeArquivo: string }> {
+  const [loteRow] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, loteId));
+  if (!loteRow) throw new Error('Ação Coletiva não encontrada.');
+
+  const registrosDoLote = await db().select().from(schema.registros).where(eq(schema.registros.loteId, loteId));
+  const associadoIds = [...new Set(registrosDoLote.map((r) => r.associadoId))];
+  const associadosDoLote =
+    associadoIds.length > 0 ? await db().select().from(schema.associados).where(inArray(schema.associados.id, associadoIds)) : [];
+  const associadosPorId = new Map(associadosDoLote.map((a) => [a.id, a]));
+
+  let documentosDoLote =
+    associadoIds.length > 0
+      ? await db().select().from(schema.documentosAssociado).where(inArray(schema.documentosAssociado.associadoId, associadoIds))
+      : [];
+  if (apenasTipo) documentosDoLote = documentosDoLote.filter((d) => d.tipo === apenasTipo);
+
+  const zip = new JSZip();
+  for (const doc of documentosDoLote) {
+    const associado = associadosPorId.get(doc.associadoId);
+    const pastaAssociado = nomeArquivoSeguro(associado?.nome || doc.associadoId);
+    try {
+      const url = await getStorageProvider().criarUrlDownload(doc.storageKey, URL_STORAGE_EXPIRA_SEGUNDOS);
+      const resposta = await fetch(resolverUrlAbsoluta(url));
+      if (!resposta.ok) throw new Error(`status ${resposta.status}`);
+      const bytes = await resposta.arrayBuffer();
+      zip.file(`${pastaAssociado}/${doc.tipo}.${extensaoPorMime(doc.mimeType)}`, bytes);
+    } catch (err) {
+      console.error(`[gerarZipDocumentosLote] falha ao baixar documento ${doc.id} (${doc.tipo}):`, err);
+    }
+  }
+
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const sufixo = apenasTipo === 'ficha_associativa' ? 'fichas_associativas' : 'documentos';
+  return { buffer, nomeArquivo: `${sufixo}_${nomeArquivoSeguro(loteRow.nome)}.zip` };
+}
+
 /** Encerra a captação de uma Ação Coletiva: bloqueia novos envios, gera o
  * pacote (planilha + documentos anexados dos associados, em um único ZIP) e
  * avisa a equipe ABDCM no WhatsApp (I1/I9 — só quem não é parceiro aciona;
@@ -2095,6 +3284,12 @@ async function encerrarLote(loteId: string, atorUserId: string): Promise<Resulta
 export const serverStore = {
   getSession,
   setRole,
+  buscarUsuarioPorId,
+  listarUsuarios,
+  setUsuarioAtivo,
+  autenticarUsuario,
+  registrarParceiro,
+  alterarSenha,
   getLotes,
   getAssociados,
   getRegistros,
@@ -2123,10 +3318,42 @@ export const serverStore = {
   createContestacao,
   getServicos,
   createServico,
+  dispararMarketingServico,
+  getMarketingLog,
+  getMarketingCronograma,
+  setMarketingCronogramaDia,
+  rodarMarketingCronogramaDoDia,
+  getMarketingGrupoConfig,
+  setMarketingGrupoConfig,
+  getMensagensExtra,
+  createMensagemExtra,
+  updateMensagemExtra,
+  deleteMensagemExtra,
+  getChamadasConfig,
+  createChamadaConfig,
+  updateChamadaConfig,
+  deleteChamadaConfig,
+  getChamadasLog,
+  testarChamada,
+  rodarFollowUpLigacoes,
   updateServico,
   deleteServico,
-  getContrato,
-  setContrato,
+  getDashboardExtra,
+  getConfiguracaoEmpresa,
+  setConfiguracaoEmpresa,
+  getContratos,
+  addContrato,
+  deleteContrato,
+  getComprovante,
+  gerarPlanilhaLoteBuffer,
+  gerarZipDocumentosLote,
+  getStatusOrgaosPorParceiro,
+  getNadaConstaPorParceiro,
+  marcarOrgaoBaixado,
+  getEventosNoticias,
+  createEventoNoticia,
+  updateEventoNoticia,
+  deleteEventoNoticia,
   confirmarPagamentoPixWebhook,
   getPixCobrancaPorSubmissao,
   getAutomacoesConfig,

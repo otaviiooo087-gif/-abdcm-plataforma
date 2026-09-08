@@ -1,13 +1,14 @@
 import React from 'react';
 import { UserRole } from '../domain/types.js';
 import { UserSession } from '../server/mockData.js';
-import { Shield, Bell, HelpCircle, Users, Menu, User, Layers, ArrowLeftRight } from 'lucide-react';
+import { Shield, Bell, HelpCircle, Users, Menu, User, Layers, ArrowLeftRight, LogOut } from 'lucide-react';
 
 interface HeaderProps {
   currentSurface: 'parceiro' | 'admin' | 'publico';
   onSwitchSurface?: (surface: 'parceiro' | 'admin' | 'publico') => void;
   session: UserSession | null;
   onSwitchRole: (role: UserRole) => void;
+  onLogout?: () => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
 }
@@ -17,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSwitchSurface,
   session,
   onSwitchRole,
+  onLogout,
 }) => {
   const getSurfaceLabel = () => {
     switch (currentSurface) {
@@ -46,7 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-3">
         <button
           title="Menu de Navegação"
-          className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer"
+          className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer abdcm-glow"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -71,7 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="hidden sm:flex items-center bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
           <button
             onClick={() => onSwitchSurface?.('parceiro')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer abdcm-glow ${
               currentSurface === 'parceiro'
                 ? 'bg-white text-[#106778] font-bold shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -81,7 +83,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSwitchSurface?.('admin')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer abdcm-glow ${
               currentSurface === 'admin'
                 ? 'bg-white text-[#106778] font-bold shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -91,7 +93,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSwitchSurface?.('publico')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer abdcm-glow ${
               currentSurface === 'publico'
                 ? 'bg-white text-[#106778] font-bold shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -101,8 +103,9 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
 
-        {/* Role Simulator (Admin only) */}
-        {currentSurface === 'admin' && (
+        {/* Role Simulator (Admin only) — só no modo demonstração; com login
+            real (session.autenticado) o papel vem da conta, não se troca */}
+        {currentSurface === 'admin' && !session?.autenticado && (
           <div className="hidden lg:flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs">
             <Users className="w-3.5 h-3.5 text-[#106778]" />
             <span className="text-[11px] font-medium text-slate-500">Papel:</span>
@@ -136,6 +139,15 @@ export const Header: React.FC<HeaderProps> = ({
               {currentSurface === 'admin' ? `Acesso: ${session?.role || 'Administrador'}` : 'Parceiro Credenciado'}
             </span>
           </div>
+          {session?.autenticado && onLogout && (
+            <button
+              title="Sair"
+              onClick={onLogout}
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-red-600 transition-colors cursor-pointer abdcm-glow"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </header>

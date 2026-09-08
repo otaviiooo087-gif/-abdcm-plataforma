@@ -10,7 +10,9 @@ import {
   SEED_PROCESS_EVENTS,
   SEED_AUDIT_LOG,
   SEED_SUBMISSOES,
+  ABDCM_TENANT_ID,
 } from '../mockData'
+import { hashPassword } from '../auth/password'
 
 /**
  * Popula o banco com os mesmos dados de demonstração que o mockDb usava em
@@ -155,6 +157,50 @@ async function main() {
         ocorridoEm: a.ocorrido_em,
       })),
     )
+
+    // Contas de login real (parceiro + administrador) só são criadas se as
+    // senhas vierem por variável de ambiente — nunca um valor fixo no
+    // repositório (I10). Sem elas, o seed segue sem criar login nenhum; use
+    // `npm run db:criar-conta` depois pra criar contas a qualquer momento
+    // (este script aqui não é seguro rodar de novo — ver comentário acima).
+    const senhaParceiro = process.env.SEED_PARCEIRO_SENHA
+    const senhaAdmin = process.env.SEED_ADMIN_SENHA
+    if (senhaParceiro || senhaAdmin) {
+      console.log('semeando contas de login (usuarios)...')
+      const now = new Date().toISOString()
+      if (senhaParceiro) {
+        await db.insert(schema.usuarios).values({
+          id: 'usr-login-parceiro-01',
+          tenantId: ABDCM_TENANT_ID,
+          nome: 'Rdz Consultoria Financeira',
+          email: 'contato@rdzconsultoria.com.br',
+          senhaHash: hashPassword(senhaParceiro),
+          role: 'parceiro',
+          parceiroId: 'parc-001',
+          partnerCode: 'PARC-RDZ-001',
+          ativo: true,
+          createdAt: now,
+        })
+        console.log('  conta parceiro criada: contato@rdzconsultoria.com.br')
+      }
+      if (senhaAdmin) {
+        await db.insert(schema.usuarios).values({
+          id: 'usr-login-admin-01',
+          tenantId: ABDCM_TENANT_ID,
+          nome: 'Dra. Helena Valente (Administrador Geral)',
+          email: 'helena.admin@abdcm.org.br',
+          senhaHash: hashPassword(senhaAdmin),
+          role: 'administrador',
+          ativo: true,
+          createdAt: now,
+        })
+        console.log('  conta administrador criada: helena.admin@abdcm.org.br')
+      }
+    } else {
+      console.log(
+        'nenhuma conta de login criada (defina SEED_PARCEIRO_SENHA e/ou SEED_ADMIN_SENHA pra criar).',
+      )
+    }
 
     console.log('\npronto.')
   } finally {

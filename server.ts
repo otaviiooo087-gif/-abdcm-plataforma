@@ -8,14 +8,41 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { serverStore } from './src/server/store';
+import { authContext } from './src/server/auth/context';
+import { SESSION_COOKIE_NAME, verificarTokenSessao } from './src/server/auth/session';
 import { cleanDocument } from './src/lib/masking/documentMasker';
 import { avisarStatusProcesso, rodarAutomacoes } from './src/server/notificacoes';
 import { pixProviderConfigurado } from './src/integrations/pix/index';
 import { whatsAppProviderConfigurado } from './src/integrations/whatsapp/index';
 import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integrations/storage/index';
 import { ocrProviderConfigurado } from './src/integrations/ocr/index';
-import type { Registro } from './src/domain/types';
+import type { Registro, OrgaoBureau } from './src/domain/types';
 import { promises as fs } from 'node:fs';
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
+  }
+  return out;
+}
+
+const SESSION_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias, igual ao TTL do token
+
+function definirCookieSessao(res: Response, token: string): void {
+  res.cookie(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: SESSION_COOKIE_MAX_AGE_MS,
+    path: '/',
+  });
+}
 
 /** Dispara avisos de status por WhatsApp sem segurar a resposta HTTP — falha vira só um log. */
 function dispararAvisosDeStatus(registros: Registro[], novoStatus: string): void {
@@ -39,6 +66,28 @@ async function startServer() {
   // Limite elevado por causa do upload do contrato-modelo em base64 (padrão do
   // Express é 100kb, pequeno demais até pra um PDF simples de poucas páginas).
   app.use(express.json({ limit: '15mb' }));
+
+  // Sessão real (parceiro/administrador) via cookie assinado — disponível
+  // pro resto da request via AsyncLocalStorage (src/server/auth/context.ts),
+  // sem precisar passar `req` por toda a cadeia do store. Sem cookie válido,
+  // authContext fica null e serverStore.getSession() cai no seletor de
+  // papel de demonstração, exatamente como antes desta funcionalidade.
+  app.use((req: Request, _res: Response, next) => {
+    const cookies = parseCookies(req.headers.cookie);
+    const token = cookies[SESSION_COOKIE_NAME];
+    const verificado = verificarTokenSessao(token);
+    if (!verificado) {
+      authContext.run(null, next);
+      return;
+    }
+    serverStore
+      .buscarUsuarioPorId(verificado.uid)
+      .then((sessaoReal) => authContext.run(sessaoReal, next))
+      .catch((err) => {
+        console.error('[auth] falha ao resolver sessão real:', err);
+        authContext.run(null, next);
+      });
+  });
 
   // Rotas de armazenamento mock (só existem quando não há R2 configurado —
   // ver src/integrations/storage). Simulam PUT/GET assinado guardando em
@@ -86,6 +135,76 @@ async function startServer() {
     }
     const session = serverStore.setRole(role);
     res.json(session);
+  });
+
+  // 1.1 Login real (parceiro e administrador) — os outros 4 papéis continuam
+  // só na troca de papel de demonstração acima.
+  app.post('/api/auth/login', async (req: Request, res: Response) => {
+    try {
+      const { email, senha } = req.body ?? {};
+      if (typeof email !== 'string' || typeof senha !== 'string') {
+        res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
+        return;
+      }
+      const resultado = await serverStore.autenticarUsuario(email, senha);
+      if ('erro' in resultado) {
+        res.status(401).json({ error: resultado.erro });
+        return;
+      }
+      definirCookieSessao(res, resultado.token);
+      res.json(resultado.sessao);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao entrar.';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 1.2 Cadastro de parceiro (self-service). Contas de administrador não têm
+  // cadastro aberto — são provisionadas por quem já administra o tenant.
+  app.post('/api/auth/register', async (req: Request, res: Response) => {
+    try {
+      const { nome, email, senha } = req.body ?? {};
+      if (typeof nome !== 'string' || typeof email !== 'string' || typeof senha !== 'string') {
+        res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
+        return;
+      }
+      const resultado = await serverStore.registrarParceiro({ nome, email, senha });
+      if ('erro' in resultado) {
+        res.status(400).json({ error: resultado.erro });
+        return;
+      }
+      definirCookieSessao(res, resultado.token);
+      res.status(201).json(resultado.sessao);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao cadastrar.';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/auth/logout', (_req: Request, res: Response) => {
+    res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+    res.json({ success: true });
+  });
+
+  // 1.3 Troca de senha — só pra quem está de fato logado com conta real
+  // (cookie assinado); modo demonstração não tem senha pra trocar.
+  app.post('/api/auth/change-password', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (!session.autenticado) {
+      res.status(401).json({ error: 'Faça login com sua conta para trocar a senha.' });
+      return;
+    }
+    const { senhaAtual, novaSenha } = req.body ?? {};
+    if (typeof senhaAtual !== 'string' || typeof novaSenha !== 'string') {
+      res.status(400).json({ error: 'Senha atual e nova senha são obrigatórias.' });
+      return;
+    }
+    const resultado = await serverStore.alterarSenha(session.id, senhaAtual, novaSenha);
+    if ('erro' in resultado) {
+      res.status(400).json({ error: resultado.erro });
+      return;
+    }
+    res.json({ success: true });
   });
 
   // 2. Lotes
@@ -145,11 +264,85 @@ async function startServer() {
         return;
       }
       const { id } = req.params;
-      const { closesAt, nome } = req.body;
-      const lote = await serverStore.updateLote(id, session.id, { closesAt, nome });
+      const {
+        closesAt,
+        nome,
+        numeroProcesso,
+        varaTribunal,
+        juiz,
+        referenciaProtocolo,
+        dataProtocolo,
+        dataDistribuicao,
+        liminarStatus,
+      } = req.body;
+      const lote = await serverStore.updateLote(id, session.id, {
+        closesAt,
+        nome,
+        numeroProcesso,
+        varaTribunal,
+        juiz,
+        referenciaProtocolo,
+        dataProtocolo,
+        dataDistribuicao,
+        liminarStatus,
+      });
       res.json(lote);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao atualizar lote';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 2.1.1 Downloads em massa (planilha e documentos), sob demanda — não
+  // muda status do lote, diferente de /encerrar. Navegação direta (<a
+  // href>), então usa o cookie de sessão normal, sem precisar de fetch+blob.
+  app.get('/api/lotes/:id/planilha.xlsx', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM baixa a lista completa.' });
+        return;
+      }
+      const { buffer, nomeArquivo } = await serverStore.gerarPlanilhaLoteBuffer(req.params.id);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+      res.send(Buffer.from(buffer));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar planilha';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/lotes/:id/documentos.zip', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM baixa os documentos em massa.' });
+        return;
+      }
+      const { buffer, nomeArquivo } = await serverStore.gerarZipDocumentosLote(req.params.id);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+      res.send(buffer);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar arquivo de documentos';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/lotes/:id/fichas-associativas.zip', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM baixa as fichas associativas em massa.' });
+        return;
+      }
+      const { buffer, nomeArquivo } = await serverStore.gerarZipDocumentosLote(req.params.id, 'ficha_associativa');
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+      res.send(buffer);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar arquivo de fichas associativas';
       res.status(400).json({ error: msg });
     }
   });
@@ -360,6 +553,27 @@ async function startServer() {
     }
   });
 
+  // 4.6.4 Ver Comprovante — o parceiro só vê o próprio; a equipe ABDCM vê qualquer um.
+  app.get('/api/submissoes/:id/comprovante', async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const session = serverStore.getSession();
+      const comprovante = await serverStore.getComprovante(id);
+      if (!comprovante) {
+        res.status(404).json({ error: 'Nenhum comprovante anexado nesta submissão.' });
+        return;
+      }
+      if (session.role === 'parceiro' && session.parceiro_id !== comprovante.parceiroId) {
+        res.status(403).json({ error: 'Você só pode ver comprovantes das suas próprias submissões.' });
+        return;
+      }
+      res.json({ comprovanteBase64: comprovante.comprovanteBase64, mimeType: comprovante.mimeType });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao buscar comprovante';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 4.7 Cancelar Submissão Pendente
   app.delete('/api/submissoes/:id', async (req: Request, res: Response) => {
     try {
@@ -506,8 +720,17 @@ async function startServer() {
         res.status(403).json({ error: 'Apenas a equipe ABDCM cadastra serviços.' });
         return;
       }
-      const { nome, descricao, preco, prazoDias, usaListas } = req.body;
-      const novo = await serverStore.createServico({ nome, descricao, preco, prazoDias, usaListas });
+      const { nome, descricao, preco, custo, prazoDias, usaListas, fotoUrl, linkRedirecionamento } = req.body;
+      const novo = await serverStore.createServico({
+        nome,
+        descricao,
+        preco,
+        custo,
+        prazoDias,
+        usaListas,
+        fotoUrl,
+        linkRedirecionamento,
+      });
       res.status(201).json(novo);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao cadastrar serviço';
@@ -547,24 +770,177 @@ async function startServer() {
     }
   });
 
-  // 6.3 Contrato-modelo (admin anexa; parceiro só lê)
-  app.get('/api/contrato', async (_req: Request, res: Response) => {
-    const contrato = await serverStore.getContrato();
-    res.json(contrato);
+  // 6.1.1 Marketing de serviços — aba Serviços > Marketing (admin-only)
+  app.get('/api/marketing/log', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa o marketing de serviços.' });
+      return;
+    }
+    res.json(await serverStore.getMarketingLog());
   });
 
-  app.post('/api/contrato', async (req: Request, res: Response) => {
+  app.get('/api/marketing/cronograma', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa o marketing de serviços.' });
+      return;
+    }
+    res.json(await serverStore.getMarketingCronograma());
+  });
+
+  app.put('/api/marketing/cronograma/:diaSemana', async (req: Request, res: Response) => {
     try {
       const session = serverStore.getSession();
       if (session.role === 'parceiro') {
-        res.status(403).json({ error: 'Apenas a equipe ABDCM anexa o contrato.' });
+        res.status(403).json({ error: 'Apenas a equipe ABDCM configura o marketing de serviços.' });
         return;
       }
-      const { nomeArquivo, mimeType, conteudoBase64 } = req.body;
-      const contrato = await serverStore.setContrato({ nomeArquivo, mimeType, conteudoBase64 });
+      const diaSemana = parseInt(req.params.diaSemana, 10);
+      const { servicoId, ativo } = req.body;
+      const linha = await serverStore.setMarketingCronogramaDia(diaSemana, servicoId ?? null, ativo ?? true);
+      res.json(linha);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao configurar cronograma';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/marketing/disparo', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM dispara marketing.' });
+        return;
+      }
+      const { servicoId, mensagem } = req.body;
+      const resultado = await serverStore.dispararMarketingServico(servicoId, mensagem, 'manual', session.id);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao disparar marketing';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/marketing/grupo-config', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa o marketing de serviços.' });
+      return;
+    }
+    res.json(await serverStore.getMarketingGrupoConfig());
+  });
+
+  app.put('/api/marketing/grupo-config', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM configura o marketing de serviços.' });
+        return;
+      }
+      const atualizado = await serverStore.setMarketingGrupoConfig(req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao salvar configuração';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.2.1 Eventos e Notícias — CMS controlado pelo admin (live, novo
+  // serviço, comunicados etc), exibido pro parceiro na aba Eventos.
+  app.get('/api/eventos-noticias', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getEventosNoticias());
+  });
+
+  app.post('/api/eventos-noticias', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM publica eventos e notícias.' });
+        return;
+      }
+      const { tipo, titulo, descricao, categoria, imagemUrl, linkExterno, dataEvento } = req.body;
+      const novo = await serverStore.createEventoNoticia({
+        tipo,
+        titulo,
+        descricao,
+        categoria,
+        imagemUrl,
+        linkExterno,
+        dataEvento,
+        atorUserId: session.id,
+      });
+      res.status(201).json(novo);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao publicar';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.patch('/api/eventos-noticias/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM edita eventos e notícias.' });
+        return;
+      }
+      const atualizado = await serverStore.updateEventoNoticia(req.params.id, req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/eventos-noticias/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM remove eventos e notícias.' });
+        return;
+      }
+      await serverStore.deleteEventoNoticia(req.params.id);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao remover';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.3 Contratos e Documentos Complementares (admin anexa quantos quiser —
+  // ficha associativa modelo, contrato de intermediação etc; parceiro só lê)
+  app.get('/api/contratos', async (_req: Request, res: Response) => {
+    const contratos = await serverStore.getContratos();
+    res.json(contratos);
+  });
+
+  app.post('/api/contratos', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM anexa documentos.' });
+        return;
+      }
+      const { titulo, nomeArquivo, mimeType, conteudoBase64 } = req.body;
+      const contrato = await serverStore.addContrato({ titulo, nomeArquivo, mimeType, conteudoBase64 });
       res.status(201).json(contrato);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Erro ao anexar contrato';
+      const msg = err instanceof Error ? err.message : 'Erro ao anexar documento';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/contratos/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM remove documentos.' });
+        return;
+      }
+      await serverStore.deleteContrato(req.params.id);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao remover documento';
       res.status(400).json({ error: msg });
     }
   });
@@ -589,6 +965,42 @@ async function startServer() {
   });
 
   // 6.6 Status das integrações (Configurações > APIs) — nunca expõe a chave, só se está configurada.
+  // 6.4.1 Controle de Acesso — lista de contas reais e ativar/desativar
+  app.get('/api/admin/usuarios', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM vê as contas de acesso.' });
+      return;
+    }
+    res.json(await serverStore.listarUsuarios());
+  });
+
+  app.patch('/api/admin/usuarios/:id/ativo', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role !== 'administrador') {
+        res.status(403).json({ error: 'Apenas o administrador ativa ou desativa contas de acesso.' });
+        return;
+      }
+      const { ativo } = req.body;
+      await serverStore.setUsuarioAtivo(req.params.id, Boolean(ativo), session.id);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar conta';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.5.1 Métricas extras do Dashboard (parceiros novos, rankings) — admin only
+  app.get('/api/admin/dashboard-extra', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM vê essas métricas.' });
+      return;
+    }
+    res.json(await serverStore.getDashboardExtra());
+  });
+
   app.get('/api/config/status', (_req: Request, res: Response) => {
     res.json({
       pix: { provider: 'asaas', configurado: pixProviderConfigurado() },
@@ -596,6 +1008,51 @@ async function startServer() {
       storage: { provider: 'r2', configurado: storageProviderConfigurado() },
       ocr: { provider: 'claude', configurado: ocrProviderConfigurado() },
     });
+  });
+
+  // 6.6.1 Dados cadastrais da empresa (Configurações > Empresa)
+  app.get('/api/config/empresa', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getConfiguracaoEmpresa());
+  });
+
+  app.put('/api/config/empresa', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM edita os dados da empresa.' });
+        return;
+      }
+      const {
+        razaoSocial,
+        cnpj,
+        endereco,
+        telefone,
+        email,
+        bancoNome,
+        bancoAgencia,
+        bancoConta,
+        bancoPixChave,
+        oabNumero,
+        oabUf,
+      } = req.body;
+      const atualizado = await serverStore.setConfiguracaoEmpresa({
+        razao_social: razaoSocial || '',
+        cnpj: cnpj || '',
+        endereco: endereco || '',
+        telefone: telefone || '',
+        email: email || '',
+        banco_nome: bancoNome || '',
+        banco_agencia: bancoAgencia || '',
+        banco_conta: bancoConta || '',
+        banco_pix_chave: bancoPixChave || '',
+        oab_numero: oabNumero || '',
+        oab_uf: oabUf || '',
+      });
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao salvar dados da empresa';
+      res.status(400).json({ error: msg });
+    }
   });
 
   // 6.7 Automações de WhatsApp — configuração das regras + log de envios
@@ -637,6 +1094,97 @@ async function startServer() {
       const msg = err instanceof Error ? err.message : 'Erro ao rodar automações';
       res.status(400).json({ error: msg });
     }
+  });
+
+  // 6.7.1 Mensagens extras por gatilho — botão "Criar Nova Mensagem"
+  const exigirEquipeAbdcm = (session: ReturnType<typeof serverStore.getSession>, res: Response): boolean => {
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa automações.' });
+      return false;
+    }
+    return true;
+  };
+
+  app.get('/api/automacoes/mensagens-extra', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getMensagensExtra());
+  });
+
+  app.post('/api/automacoes/mensagens-extra', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const novo = await serverStore.createMensagemExtra(req.body);
+      res.status(201).json(novo);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao criar mensagem' });
+    }
+  });
+
+  app.patch('/api/automacoes/mensagens-extra/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const atualizado = await serverStore.updateMensagemExtra(req.params.id, req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao atualizar mensagem' });
+    }
+  });
+
+  app.delete('/api/automacoes/mensagens-extra/:id', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (!exigirEquipeAbdcm(session, res)) return;
+    await serverStore.deleteMensagemExtra(req.params.id);
+    res.json({ success: true });
+  });
+
+  // 6.7.2 Automação de ligação — MOCK (CLAUDE.md seção 8)
+  app.get('/api/automacoes/chamadas', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getChamadasConfig());
+  });
+
+  app.post('/api/automacoes/chamadas', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const novo = await serverStore.createChamadaConfig(req.body);
+      res.status(201).json(novo);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao criar configuração de ligação' });
+    }
+  });
+
+  app.patch('/api/automacoes/chamadas/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const atualizado = await serverStore.updateChamadaConfig(req.params.id, req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao atualizar configuração de ligação' });
+    }
+  });
+
+  app.delete('/api/automacoes/chamadas/:id', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (!exigirEquipeAbdcm(session, res)) return;
+    await serverStore.deleteChamadaConfig(req.params.id);
+    res.json({ success: true });
+  });
+
+  app.post('/api/automacoes/chamadas/:id/testar', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (!exigirEquipeAbdcm(session, res)) return;
+      const resultado = await serverStore.testarChamada(req.params.id, req.body.telefone);
+      res.json(resultado);
+    } catch (err: unknown) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao testar ligação' });
+    }
+  });
+
+  app.get('/api/automacoes/chamadas/log', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getChamadasLog());
   });
 
   // 6.8 Documentos do associado (CNH/RG) — upload em massa direto pro storage.
@@ -729,6 +1277,40 @@ async function startServer() {
     const session = serverStore.getSession();
     const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
     res.json(await serverStore.getDocumentosStatus(parceiroId));
+  });
+
+  // Status por órgão (birô) de cada registro protocolado — popup "Ver
+  // nomes anexados" em Minhas Listas.
+  app.get('/api/registro-orgaos', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+    res.json(await serverStore.getStatusOrgaosPorParceiro(parceiroId));
+  });
+
+  // Nada consta emitido automaticamente quando todos os órgãos dão baixa.
+  app.get('/api/nada-consta', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+    res.json(await serverStore.getNadaConstaPorParceiro(parceiroId));
+  });
+
+  // Admin registra a baixa de um órgão específico pra um registro
+  // protocolado. Quando o 5º órgão baixa, o registro vira "baixado"
+  // automaticamente e o nada consta é emitido sozinho.
+  app.post('/api/registros/:id/orgaos/:orgao/baixar', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM registra baixa de órgão.' });
+        return;
+      }
+      const { id, orgao } = req.params;
+      const resultado = await serverStore.marcarOrgaoBaixado(id, orgao as OrgaoBureau, session.id);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao registrar baixa';
+      res.status(400).json({ error: msg });
+    }
   });
 
   app.get('/api/associados/:id/documentos/:tipo/download', async (req: Request, res: Response) => {
@@ -843,11 +1425,17 @@ async function startServer() {
   // idempotente por conta própria (ver notificacoes.ts), então rodar de
   // novo a cada intervalo é seguro.
   const INTERVALO_AUTOMACOES_MS = 15 * 60 * 1000; // 15 minutos
+  const rodarTudo = () => {
+    rodarAutomacoes().catch((err) => console.error('[automacoes] falha na rodada:', err));
+    // Cronograma semanal de marketing (aba Serviços > Marketing) — mesmo
+    // agendador, idempotente por dia (ver rodarMarketingCronogramaDoDia).
+    serverStore.rodarMarketingCronogramaDoDia().catch((err) => console.error('[marketing] falha no cronograma:', err));
+    // Follow-up de ligação (mock) — mesmo agendador, idempotente por config+telefone.
+    serverStore.rodarFollowUpLigacoes().catch((err) => console.error('[automacoes] falha no follow-up de ligação:', err));
+  };
   setTimeout(() => {
-    rodarAutomacoes().catch((err) => console.error('[automacoes] falha na primeira rodada:', err));
-    setInterval(() => {
-      rodarAutomacoes().catch((err) => console.error('[automacoes] falha na rodada agendada:', err));
-    }, INTERVALO_AUTOMACOES_MS);
+    rodarTudo();
+    setInterval(rodarTudo, INTERVALO_AUTOMACOES_MS);
   }, 30_000);
 }
 

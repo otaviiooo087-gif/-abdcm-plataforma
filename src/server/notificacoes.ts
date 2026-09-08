@@ -12,7 +12,7 @@ import { db } from './db/client.js';
 import * as schema from './db/schema.js';
 import { ABDCM_TENANT_ID } from './mockData.js';
 import { getWhatsAppProvider } from '../integrations/whatsapp/index.js';
-import { AUTOMACOES_DISPONIVEIS, getAutomacoesConfig } from './store.js';
+import { AUTOMACOES_DISPONIVEIS, getAutomacoesConfig, getMensagensExtra, aplicarTemplateMensagem } from './store.js';
 import type { TipoNotificacao, Registro } from '../domain/types.js';
 
 function novoId(prefixo: string): string {
@@ -32,7 +32,7 @@ function formatarDataHora(iso: string): string {
 }
 
 async function jaFoiEnviado(
-  tipo: TipoNotificacao,
+  tipo: string,
   referenciaTipo: string,
   referenciaId: string,
   telefone: string,
@@ -54,7 +54,7 @@ async function jaFoiEnviado(
 
 /** Envia (via provedor configurado) e registra — pulando quem já recebeu este exato aviso. */
 async function enviarComDedup(params: {
-  tipo: TipoNotificacao;
+  tipo: string;
   telefone: string;
   mensagem: string;
   associadoId?: string;
@@ -103,11 +103,40 @@ function associadosElegiveis() {
     .where(and(eq(schema.associados.tenantId, ABDCM_TENANT_ID), isNotNull(schema.associados.telefoneWhatsapp)));
 }
 
+/**
+ * Envia as mensagens extras cadastradas pelo admin (aba Automações > "Criar
+ * Nova Mensagem") pro mesmo gatilho — cada extra é deduplicada pelo próprio
+ * id (um associado nunca recebe a mesma extra duas vezes pra mesma referência).
+ */
+async function enviarExtrasDoGatilho(
+  gatilho: TipoNotificacao,
+  telefone: string,
+  associadoId: string | undefined,
+  referenciaTipo: string,
+  referenciaId: string,
+  tokens: Record<string, string>,
+): Promise<number> {
+  const extras = (await getMensagensExtra()).filter((m) => m.gatilho === gatilho && m.ativo);
+  let enviados = 0;
+  for (const extra of extras) {
+    const enviou = await enviarComDedup({
+      tipo: `extra:${extra.id}`,
+      telefone,
+      mensagem: aplicarTemplateMensagem(extra.mensagem, tokens),
+      associadoId,
+      referenciaTipo,
+      referenciaId,
+    });
+    if (enviou) enviados++;
+  }
+  return enviados;
+}
+
 // -----------------------------------------------------------------------
 // 1. Próxima Ação Coletiva abrindo
 // -----------------------------------------------------------------------
 async function avisarProximoLote(): Promise<number> {
-  const { ativo } = await regraAtiva('proximo_lote');
+  const { ativo, config } = await regraAtiva('proximo_lote');
   if (!ativo) return 0;
 
   const lotesAbertos = await db().select().from(schema.lotes).where(eq(schema.lotes.status, 'aberto'));
@@ -115,10 +144,14 @@ async function avisarProximoLote(): Promise<number> {
   let enviados = 0;
 
   for (const lote of lotesAbertos) {
-    const mensagem =
-      `${saudacao()}! Aqui é da ABDCM 👋 Passando pra avisar que a próxima Lista Limpa Nome ` +
-      `(${lote.nome}) está com captação aberta, encerrando em ${formatarDataHora(lote.closesAt)}. ` +
-      `Aproveita pra anexar seus nomes com o parceiro que cuidou da sua filiação!`;
+    const tokens = { saudacao: saudacao(), lote: lote.nome, data: formatarDataHora(lote.closesAt) };
+    const template =
+      typeof config.mensagemTemplate === 'string' && config.mensagemTemplate.trim()
+        ? config.mensagemTemplate
+        : `{saudacao}! Aqui é da ABDCM 👋 Passando pra avisar que a próxima Lista Limpa Nome ` +
+          `({lote}) está com captação aberta, encerrando em {data}. ` +
+          `Aproveita pra anexar seus nomes com o parceiro que cuidou da sua filiação!`;
+    const mensagem = aplicarTemplateMensagem(template, tokens);
 
     for (const associado of associados) {
       if (associado.statusFiliacao === 'inativo') continue;
@@ -131,6 +164,10 @@ async function avisarProximoLote(): Promise<number> {
         referenciaId: lote.id,
       });
       if (enviou) enviados++;
+      enviados += await enviarExtrasDoGatilho('proximo_lote', associado.telefoneWhatsapp, associado.id, 'lote', lote.id, {
+        ...tokens,
+        nome: associado.nome.split(' ')[0],
+      });
     }
   }
   return enviados;
@@ -161,10 +198,13 @@ async function avisarFollowUpLista(): Promise<number> {
     for (const associado of associados) {
       if (associado.statusFiliacao === 'inativo' || jaEntraram.has(associado.id)) continue;
 
-      const mensagem =
-        `Oi ${associado.nome.split(' ')[0]}! Notei que você ainda não anexou os seus nomes na Lista Limpa Nome ` +
-        `(${lote.nome}), que fecha ${formatarDataHora(lote.closesAt)}. Anexa agora pra não perder a oportunidade ` +
-        `de ter seus nomes limpos!`;
+      const tokens = { saudacao: saudacao(), nome: associado.nome.split(' ')[0], lote: lote.nome, data: formatarDataHora(lote.closesAt) };
+      const template =
+        typeof config.mensagemTemplate === 'string' && config.mensagemTemplate.trim()
+          ? config.mensagemTemplate
+          : `Oi {nome}! Notei que você ainda não anexou os seus nomes na Lista Limpa Nome ` +
+            `({lote}), que fecha {data}. Anexa agora pra não perder a oportunidade de ter seus nomes limpos!`;
+      const mensagem = aplicarTemplateMensagem(template, tokens);
 
       const enviou = await enviarComDedup({
         tipo: 'follow_up_lista',
@@ -175,6 +215,7 @@ async function avisarFollowUpLista(): Promise<number> {
         referenciaId: lote.id,
       });
       if (enviou) enviados++;
+      enviados += await enviarExtrasDoGatilho('follow_up_lista', associado.telefoneWhatsapp, associado.id, 'lote', lote.id, tokens);
     }
   }
   return enviados;
@@ -203,25 +244,34 @@ export async function avisarStatusProcesso(registro: Registro, novoStatus: strin
   const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, registro.associado_id));
   if (!associado?.telefoneWhatsapp) return;
 
-  const { ativo } = await regraAtiva('status_processo');
+  const { ativo, config } = await regraAtiva('status_processo');
   if (!ativo) return;
 
   const [lote] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, registro.lote_id));
   const loteNome = lote?.nome ?? 'Ação Coletiva';
   const bureaus = lote?.bureaus?.join(', ') ?? 'Serasa, SPC, Boa Vista';
-  const construtor = MENSAGEM_POR_STATUS[novoStatus];
-  if (!construtor) return;
+  const nome = associado.nome.split(' ')[0];
+  const tokens = { saudacao: saudacao(), nome, lote: loteNome, orgaos: bureaus, status: novoStatus };
 
-  const mensagem = `${saudacao()} ${associado.nome.split(' ')[0]}! ${construtor(loteNome, bureaus)}`;
+  let mensagem: string;
+  if (typeof config.mensagemTemplate === 'string' && config.mensagemTemplate.trim()) {
+    mensagem = aplicarTemplateMensagem(config.mensagemTemplate, tokens);
+  } else {
+    const construtor = MENSAGEM_POR_STATUS[novoStatus];
+    if (!construtor) return;
+    mensagem = `${saudacao()} ${nome}! ${construtor(loteNome, bureaus)}`;
+  }
 
+  const referenciaId = `${registro.id}:${novoStatus}`;
   await enviarComDedup({
     tipo: 'status_processo',
     telefone: associado.telefoneWhatsapp,
     mensagem,
     associadoId: associado.id,
     referenciaTipo: 'registro',
-    referenciaId: `${registro.id}:${novoStatus}`,
+    referenciaId,
   });
+  await enviarExtrasDoGatilho('status_processo', associado.telefoneWhatsapp, associado.id, 'registro', referenciaId, tokens);
 }
 
 // -----------------------------------------------------------------------
@@ -247,20 +297,60 @@ async function avisarPagamentoPendente(): Promise<number> {
       const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
       if (!associado?.telefoneWhatsapp) continue;
 
-      const mensagem =
-        `Oi ${associado.nome.split(' ')[0]}! Vimos que o pagamento PIX da sua lista ainda está pendente. ` +
-        `Aconteceu algum problema? Se precisar de ajuda é só responder por aqui 🙂`;
+      const tokens = { saudacao: saudacao(), nome: associado.nome.split(' ')[0] };
+      const template =
+        typeof config.mensagemTemplate === 'string' && config.mensagemTemplate.trim()
+          ? config.mensagemTemplate
+          : `Oi {nome}! Vimos que o pagamento PIX da sua lista ainda está pendente. ` +
+            `Aconteceu algum problema? Se precisar de ajuda é só responder por aqui 🙂`;
+      const mensagem = aplicarTemplateMensagem(template, tokens);
 
+      const referenciaId = `${submissao.id}:${associadoId}`;
       const enviou = await enviarComDedup({
         tipo: 'pagamento_pendente',
         telefone: associado.telefoneWhatsapp,
         mensagem,
         associadoId: associado.id,
         referenciaTipo: 'submissao',
-        referenciaId: `${submissao.id}:${associadoId}`,
+        referenciaId,
       });
       if (enviou) enviados++;
+      enviados += await enviarExtrasDoGatilho('pagamento_pendente', associado.telefoneWhatsapp, associado.id, 'submissao', referenciaId, tokens);
     }
+  }
+  return enviados;
+}
+
+// -----------------------------------------------------------------------
+// 5. Boas-vindas ao se cadastrar (associado novo com WhatsApp)
+// -----------------------------------------------------------------------
+async function avisarBoasVindasCadastro(): Promise<number> {
+  const { ativo, config } = await regraAtiva('cadastro_associado');
+  if (!ativo) return 0;
+
+  const associados = await associadosElegiveis();
+  let enviados = 0;
+
+  for (const associado of associados) {
+    const tokens = { saudacao: saudacao(), nome: associado.nome.split(' ')[0] };
+    const template =
+      typeof config.mensagemTemplate === 'string' && config.mensagemTemplate.trim()
+        ? config.mensagemTemplate
+        : `{saudacao} {nome}! Aqui é da ABDCM 👋 Seja muito bem-vindo(a) ao sistema ABDCM! Você agora faz parte ` +
+          `da nossa Ação Coletiva Limpa Nome — fica de olho por aqui que a gente avisa assim que a próxima lista ` +
+          `abrir pra você anexar seus nomes.`;
+    const mensagem = aplicarTemplateMensagem(template, tokens);
+
+    const enviou = await enviarComDedup({
+      tipo: 'cadastro_associado',
+      telefone: associado.telefoneWhatsapp,
+      mensagem,
+      associadoId: associado.id,
+      referenciaTipo: 'associado',
+      referenciaId: associado.id,
+    });
+    if (enviou) enviados++;
+    enviados += await enviarExtrasDoGatilho('cadastro_associado', associado.telefoneWhatsapp, associado.id, 'associado', associado.id, tokens);
   }
   return enviados;
 }
@@ -269,17 +359,19 @@ export interface ResultadoAutomacoes {
   proximoLote: number;
   followUpLista: number;
   pagamentoPendente: number;
+  boasVindasCadastro: number;
   erros: string[];
 }
 
 /** Roda as regras de varredura (as duas orientadas a evento não entram aqui). */
 export async function rodarAutomacoes(): Promise<ResultadoAutomacoes> {
-  const resultado: ResultadoAutomacoes = { proximoLote: 0, followUpLista: 0, pagamentoPendente: 0, erros: [] };
+  const resultado: ResultadoAutomacoes = { proximoLote: 0, followUpLista: 0, pagamentoPendente: 0, boasVindasCadastro: 0, erros: [] };
 
   for (const [chave, fn] of [
     ['proximoLote', avisarProximoLote],
     ['followUpLista', avisarFollowUpLista],
     ['pagamentoPendente', avisarPagamentoPendente],
+    ['boasVindasCadastro', avisarBoasVindasCadastro],
   ] as const) {
     try {
       resultado[chave] = await fn();

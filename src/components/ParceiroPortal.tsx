@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Lote, Registro, Associado, Contestacao, Servico, Contrato } from '../domain/types.js';
+import { motion, AnimatePresence } from 'motion/react';
+import { Lote, Registro, Associado, Contestacao, Servico, Contrato, EventoNoticia } from '../domain/types.js';
 import { StatusDocumentos, documentosEsperados } from '../lib/documentos/index.js';
 import { formatCurrencyBRL } from '../lib/money/index.js';
 import {
@@ -31,6 +32,10 @@ import {
   ShoppingBag,
   FileSignature,
   Download,
+  Radio,
+  Newspaper,
+  ExternalLink,
+  Eye,
 } from 'lucide-react';
 import { CadastrarNomeModal } from './partner/CadastrarNomeModal.js';
 import { ImportarListaModal } from './partner/ImportarListaModal.js';
@@ -61,6 +66,9 @@ interface ParceiroPortalProps {
     nome?: string;
     email?: string;
     role?: string;
+    parceiro_id?: string;
+    partner_code?: string;
+    autenticado?: boolean;
   } | null;
   onSelectParceiroTab?: (tab: string) => void;
   onOpenTimeline: (reg: Registro) => void;
@@ -205,9 +213,10 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
     loadContestacoes();
   }, []);
 
-  // Catálogo de Serviços & Contrato Limpa Nome
+  // Catálogo de Serviços & Contratos e Documentos Complementares
   const [servicos, setServicos] = useState<Servico[]>([]);
-  const [contrato, setContrato] = useState<Contrato | null>(null);
+  const [contratos, setContratos] = useState<Contrato[]>([]);
+  const [eventosNoticias, setEventosNoticias] = useState<EventoNoticia[]>([]);
 
   useEffect(() => {
     fetch('/api/servicos')
@@ -215,10 +224,15 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
       .then((data: Servico[]) => setServicos(data))
       .catch(() => setServicos([]));
 
-    fetch('/api/contrato')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: Contrato | null) => setContrato(data))
-      .catch(() => setContrato(null));
+    fetch('/api/contratos')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: Contrato[]) => setContratos(data))
+      .catch(() => setContratos([]));
+
+    fetch('/api/eventos-noticias')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: EventoNoticia[]) => setEventosNoticias(data))
+      .catch(() => setEventosNoticias([]));
   }, []);
 
   const handleAbrirContestacao = async () => {
@@ -262,6 +276,29 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
     comprovanteInputRef.current?.click();
   };
 
+  const [carregandoComprovanteId, setCarregandoComprovanteId] = useState<string | null>(null);
+
+  const handleVerComprovante = async (subId: string) => {
+    setCarregandoComprovanteId(subId);
+    try {
+      const res = await fetch(`/api/submissoes/${subId}/comprovante`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao carregar comprovante');
+      const janela = window.open();
+      if (janela) {
+        janela.document.write(
+          data.mimeType?.startsWith('image/')
+            ? `<img src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="max-width:100%" />`
+            : `<embed src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="width:100%;height:100vh" />`,
+        );
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao carregar comprovante');
+    } finally {
+      setCarregandoComprovanteId(null);
+    }
+  };
+
   const handleComprovanteSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -288,6 +325,43 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
     } finally {
       setUploadingComprovante(false);
       setComprovanteTargetId(null);
+    }
+  };
+
+  // Meu Perfil — troca de senha (só disponível pra quem logou de verdade,
+  // o modo demonstração não tem conta/senha).
+  const [senhaAtualPerfil, setSenhaAtualPerfil] = useState('');
+  const [novaSenhaPerfil, setNovaSenhaPerfil] = useState('');
+  const [confirmarNovaSenhaPerfil, setConfirmarNovaSenhaPerfil] = useState('');
+  const [salvandoSenha, setSalvandoSenha] = useState(false);
+  const [erroSenha, setErroSenha] = useState<string | null>(null);
+  const [sucessoSenha, setSucessoSenha] = useState(false);
+
+  const handleAlterarSenha = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErroSenha(null);
+    setSucessoSenha(false);
+    if (novaSenhaPerfil !== confirmarNovaSenhaPerfil) {
+      setErroSenha('As senhas não conferem.');
+      return;
+    }
+    setSalvandoSenha(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senhaAtual: senhaAtualPerfil, novaSenha: novaSenhaPerfil }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao trocar senha.');
+      setSucessoSenha(true);
+      setSenhaAtualPerfil('');
+      setNovaSenhaPerfil('');
+      setConfirmarNovaSenhaPerfil('');
+    } catch (err) {
+      setErroSenha(err instanceof Error ? err.message : 'Erro ao trocar senha.');
+    } finally {
+      setSalvandoSenha(false);
     }
   };
 
@@ -413,6 +487,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         session={session}
         loteVigente={loteVigente}
         registros={registros}
+        eventosNoticias={eventosNoticias}
         onNavigateTab={(tab) => onSelectParceiroTab?.(tab)}
       />
     );
@@ -426,6 +501,217 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         submissoes={submissoes}
         documentosStatus={documentosStatus}
       />
+    );
+  }
+
+  if (parceiroTab === 'meu-perfil') {
+    return (
+      <div className="p-8 space-y-6 overflow-y-auto flex-1 max-w-2xl">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <Users className="w-6 h-6 text-[#148296]" />
+            Meu Perfil
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">Seus dados cadastrais na ABDCM</p>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-2xs">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-full bg-[#148296]/10 text-[#148296] flex items-center justify-center font-black text-lg shrink-0">
+              {(session?.nome || 'P')
+                .split(' ')
+                .map((n) => n[0])
+                .slice(0, 2)
+                .join('')
+                .toUpperCase()}
+            </div>
+            <div>
+              <p className="text-sm font-bold text-slate-900">{session?.nome || 'Parceiro'}</p>
+              <p className="text-xs text-slate-500">{session?.email || '—'}</p>
+              <span
+                className={`inline-flex items-center mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                  session?.autenticado
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}
+              >
+                {session?.autenticado ? 'Conta verificada' : 'Modo demonstração'}
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Código do Parceiro
+              </span>
+              <p className="text-sm font-bold text-slate-800 mt-0.5">{session?.partner_code || '—'}</p>
+            </div>
+            <div>
+              <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                Papel de Acesso
+              </span>
+              <p className="text-sm font-bold text-slate-800 mt-0.5 capitalize">{session?.role || 'parceiro'}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-2xs">
+          <h3 className="text-sm font-bold text-slate-900 mb-1">Alterar Senha</h3>
+          {!session?.autenticado ? (
+            <p className="text-xs text-slate-500 mt-2">
+              Você está em modo demonstração (sem conta com login real), então não há senha pra
+              trocar. Crie uma conta na tela de login pra ter acesso permanente.
+            </p>
+          ) : (
+            <form onSubmit={handleAlterarSenha} className="space-y-3 mt-3">
+              {erroSenha && (
+                <div className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs font-medium text-red-700">
+                  {erroSenha}
+                </div>
+              )}
+              {sucessoSenha && (
+                <div className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-medium text-emerald-700">
+                  Senha alterada com sucesso.
+                </div>
+              )}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Senha atual
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={senhaAtualPerfil}
+                  onChange={(e) => setSenhaAtualPerfil(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#148296]/30 focus:border-[#148296] outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Nova senha
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={8}
+                  value={novaSenhaPerfil}
+                  onChange={(e) => setNovaSenhaPerfil(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#148296]/30 focus:border-[#148296] outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  Confirmar nova senha
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={confirmarNovaSenhaPerfil}
+                  onChange={(e) => setConfirmarNovaSenhaPerfil(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-[#148296]/30 focus:border-[#148296] outline-none"
+                />
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={salvandoSenha}
+                  className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {salvandoSenha ? 'Salvando...' : 'Salvar nova senha'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (parceiroTab === 'ajuda') {
+    const secoesAjuda = [
+      {
+        titulo: 'Enviar Limpa Nome',
+        texto:
+          'Monte a lista de associados que vão entrar na Ação Coletiva vigente. Cadastre um nome por vez, importe uma planilha ou anexe documentos (CNH/RG/ficha) em massa. Quando a lista estiver pronta, clique em "Enviar Lista" — o sistema gera um PIX automático pelo valor total. O protocolo só é enviado depois da confirmação do pagamento.',
+        passos: [
+          'Cadastre nomes com "+ Cadastrar Nome" ou "Importar Lista" (planilha)',
+          'Anexe CNH/RG e ficha associativa assinada em "Anexar Documentos"',
+          'Confira o total de nomes e valor no topo da tela',
+          'Clique em "Enviar Lista" e pague o PIX gerado (expira em 60 minutos)',
+        ],
+      },
+      {
+        titulo: 'Minhas Listas',
+        texto:
+          'Acompanhe o andamento de cada nome já pago: protocolo, status em cada birô de crédito (Serasa, SPC, Boa Vista, Cenprot) e documentos anexados. Quando todos os birôs derem baixa, o nada consta de cada nome é emitido automaticamente.',
+        passos: [
+          'Abra um card de lista e clique em "Ver Nomes" para o detalhe',
+          'Acompanhe o status de cada birô (cinza = em processo, colorido = baixado)',
+          'Baixe CNH, ficha associativa ou o nada consta pelos botões de cada nome',
+        ],
+      },
+      {
+        titulo: 'Financeiro',
+        texto:
+          'Veja o valor total enviado, aprovado e pendente, e o histórico de listas pagas. Se um pagamento for reprovado na conferência, anexe um novo comprovante direto por aqui para o financeiro da ABDCM analisar de novo.',
+        passos: [
+          'Use "Ver" para conferir o comprovante já enviado numa lista',
+          'Se o status estiver "Reprovado", clique em "Anexar Comprovante" para reenviar',
+        ],
+      },
+      {
+        titulo: 'Reclame Aqui',
+        texto:
+          'Canal para contestar um nome que não baixou depois que a Ação Coletiva foi concluída. A abertura só libera 72h após a conclusão, e a ABDCM responde em até 48h.',
+        passos: ['Selecione a lista concluída', 'Descreva o motivo e envie a solicitação'],
+      },
+      {
+        titulo: 'Serviços',
+        texto: 'Catálogo de serviços adicionais oferecidos pela ABDCM, além da Ação Limpa Nome.',
+        passos: [],
+      },
+      {
+        titulo: 'Contratos e Documentos',
+        texto:
+          'Modelos oficiais disponibilizados pela ABDCM: ficha associativa, contrato de intermediação e outros documentos complementares, sempre atualizados.',
+        passos: [],
+      },
+    ];
+
+    return (
+      <div className="p-8 space-y-6 overflow-y-auto flex-1 max-w-3xl">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <HelpCircle className="w-6 h-6 text-[#148296]" />
+            Ajuda
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Como funciona cada área do portal, passo a passo
+          </p>
+        </div>
+
+        <div className="space-y-4">
+          {secoesAjuda.map((secao) => (
+            <div key={secao.titulo} className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
+              <h3 className="text-sm font-bold text-slate-900">{secao.titulo}</h3>
+              <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">{secao.texto}</p>
+              {secao.passos.length > 0 && (
+                <ol className="mt-3 space-y-1.5">
+                  {secao.passos.map((passo, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-xs text-slate-700">
+                      <span className="w-4 h-4 rounded-full bg-[#148296]/10 text-[#148296] text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                        {idx + 1}
+                      </span>
+                      {passo}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
     );
   }
 
@@ -555,6 +841,17 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
                         <td className="px-6 py-3">{statusBadge(sub.payment_status)}</td>
                         <td className="px-6 py-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            {sub.tem_comprovante && (
+                              <button
+                                type="button"
+                                disabled={carregandoComprovanteId === sub.id}
+                                onClick={() => handleVerComprovante(sub.id)}
+                                className="px-3 py-1 text-xs font-bold text-slate-600 hover:text-[#148296] hover:underline cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                {carregandoComprovanteId === sub.id ? 'Abrindo...' : 'Ver'}
+                              </button>
+                            )}
                             {sub.payment_status === 'reprovado' && (
                               <button
                                 type="button"
@@ -790,26 +1087,56 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {servicosAtivos.map((s) => (
-              <div
+              <motion.div
                 key={s.id}
-                className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs flex flex-col justify-between"
+                whileHover={{ y: -4 }}
+                className="group bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-lg hover:border-[#148296]/30 transition-shadow flex flex-col overflow-hidden"
               >
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">{s.nome}</h3>
-                  {s.descricao && (
-                    <p className="text-xs text-slate-500 mt-1">{s.descricao}</p>
+                {s.foto_url ? (
+                  <div className="h-32 w-full overflow-hidden">
+                    <img
+                      src={s.foto_url}
+                      alt={s.nome}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                  </div>
+                ) : (
+                  <div className="h-32 w-full bg-gradient-to-br from-[#106778] to-[#148296] flex items-center justify-center">
+                    <ShoppingBag className="w-8 h-8 text-white/70" />
+                  </div>
+                )}
+
+                <div className="p-5 flex flex-col flex-1 justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">{s.nome}</h3>
+                    {s.descricao && (
+                      <p className="text-xs text-slate-500 mt-1">{s.descricao}</p>
+                    )}
+                    <span className="inline-block mt-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600">
+                      {s.usa_listas ? 'Por listas' : 'Serviço único'}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                    <span className="font-black text-[#148296] text-base">
+                      {formatCurrencyBRL(s.preco)}
+                    </span>
+                    <span className="text-slate-500">{s.prazo_dias} dias</span>
+                  </div>
+
+                  {s.link_redirecionamento && (
+                    <a
+                      href={s.link_redirecionamento}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 px-4 py-2 bg-[#148296] hover:bg-[#0f6b7c] text-white text-xs font-bold rounded-lg shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      Saiba Mais
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </a>
                   )}
-                  <span className="inline-block mt-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600">
-                    {s.usa_listas ? 'Por listas' : 'Serviço único'}
-                  </span>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-black text-[#148296] text-base">
-                    {formatCurrencyBRL(s.preco)}
-                  </span>
-                  <span className="text-slate-500">{s.prazo_dias} dias</span>
-                </div>
-              </div>
+              </motion.div>
             ))}
           </div>
         )}
@@ -823,52 +1150,164 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         <div>
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <FileSignature className="w-6 h-6 text-[#148296]" />
-            Contrato Limpa Nome
+            Contratos e Documentos Complementares
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Modelo de contrato disponibilizado pela ABDCM
+            Modelos e documentos oficiais disponibilizados pela ABDCM
           </p>
         </div>
 
-        {contrato ? (
-          <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-[#148296]/10 text-[#148296] flex items-center justify-center shrink-0">
-                <FileSignature className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-slate-900">{contrato.nome_arquivo}</p>
-                <p className="text-xs text-slate-500">
-                  Atualizado em {new Date(contrato.atualizado_em).toLocaleDateString('pt-BR')}
-                </p>
-              </div>
-            </div>
-            <a
-              href={`data:${contrato.mime_type};base64,${contrato.conteudo_base64}`}
-              download={contrato.nome_arquivo}
-              className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
-            >
-              <Download className="w-4 h-4" />
-              Baixar
-            </a>
+        {contratos.length === 0 ? (
+          <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-2xs text-center text-xs text-slate-400">
+            Nenhum documento disponibilizado pela ABDCM ainda.
           </div>
         ) : (
-          <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-2xs text-center text-xs text-slate-400">
-            Nenhum contrato disponibilizado pela ABDCM ainda.
+          <div className="space-y-3">
+            {contratos.map((c) => (
+              <div
+                key={c.id}
+                className="bg-white p-6 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between gap-4"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-full bg-[#148296]/10 text-[#148296] flex items-center justify-center shrink-0">
+                    <FileSignature className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 truncate">{c.titulo}</p>
+                    <p className="text-xs text-slate-500 truncate">
+                      {c.nome_arquivo} · Atualizado em {new Date(c.atualizado_em).toLocaleDateString('pt-BR')}
+                    </p>
+                  </div>
+                </div>
+                <a
+                  href={`data:${c.mime_type};base64,${c.conteudo_base64}`}
+                  download={c.nome_arquivo}
+                  className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
+                >
+                  <Download className="w-4 h-4" />
+                  Baixar
+                </a>
+              </div>
+            ))}
           </div>
         )}
       </div>
     );
   }
 
-  // Visualização de telas informativas dos demais menus (ex: Eventos — em definição)
+  if (parceiroTab === 'eventos') {
+    const itensAtivos = eventosNoticias.filter((e) => e.ativo && e.tipo !== 'anuncio');
+    const proximoEvento = itensAtivos
+      .filter((e) => e.tipo === 'evento' && e.data_evento)
+      .sort((a, b) => new Date(a.data_evento!).getTime() - new Date(b.data_evento!).getTime())[0];
+    const restante = itensAtivos.filter((e) => e.id !== proximoEvento?.id);
+
+    const card = (item: EventoNoticia, destaque?: boolean) => (
+      <motion.div
+        key={item.id}
+        whileHover={{ y: -4 }}
+        className={`group bg-white rounded-xl border shadow-2xs hover:shadow-lg transition-shadow overflow-hidden flex flex-col ${
+          destaque ? 'border-[#148296]/40 ring-1 ring-[#148296]/10' : 'border-slate-200 hover:border-[#148296]/30'
+        }`}
+      >
+        {item.imagem_url ? (
+          <div className="h-36 w-full overflow-hidden">
+            <img
+              src={item.imagem_url}
+              alt={item.titulo}
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+            />
+          </div>
+        ) : (
+          <div className="h-24 w-full bg-gradient-to-br from-[#106778] to-[#148296] flex items-center justify-center">
+            {item.tipo === 'evento' ? (
+              <Radio className="w-7 h-7 text-white/70" />
+            ) : (
+              <Newspaper className="w-7 h-7 text-white/70" />
+            )}
+          </div>
+        )}
+        <div className="p-5 flex flex-col flex-1">
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600">
+              {item.categoria}
+            </span>
+            {item.tipo === 'evento' && item.data_evento && (
+              <span className="text-[10px] font-semibold text-[#148296] flex items-center gap-1">
+                <Calendar className="w-3 h-3" />
+                {new Date(item.data_evento).toLocaleString('pt-BR', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </span>
+            )}
+          </div>
+          <h3 className="text-sm font-bold text-slate-900">{item.titulo}</h3>
+          <p className="text-xs text-slate-500 mt-1 flex-1">{item.descricao}</p>
+          {item.link_externo && (
+            <a
+              href={item.link_externo}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 px-4 py-2 bg-[#148296] hover:bg-[#0f6b7c] text-white text-xs font-bold rounded-lg shadow-2xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            >
+              {item.tipo === 'evento' ? 'Participar' : 'Saiba Mais'}
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
+        </div>
+      </motion.div>
+    );
+
+    return (
+      <div className="p-8 space-y-6 overflow-y-auto flex-1">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+            <Calendar className="w-6 h-6 text-[#148296]" />
+            Eventos e Notícias
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Novidades, comunicados e calendário da ABDCM
+          </p>
+        </div>
+
+        {itensAtivos.length === 0 ? (
+          <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-2xs text-center text-xs text-slate-400">
+            Nenhum evento ou notícia publicado no momento.
+          </div>
+        ) : (
+          <>
+            {proximoEvento && (
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Próximo evento
+                </p>
+                <div className="max-w-md">{card(proximoEvento, true)}</div>
+              </div>
+            )}
+            {restante.length > 0 && (
+              <div>
+                {proximoEvento && (
+                  <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Mais novidades
+                  </p>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {restante.map((item) => card(item))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // Visualização de telas informativas dos demais menus (fallback genérico)
   if (parceiroTab && parceiroTab !== 'enviar-limpa-nome') {
-    const titles: Record<string, { name: string; desc: string }> = {
-      eventos: {
-        name: 'Eventos & Notícias',
-        desc: 'Novidades, comunicados e calendário da ABDCM',
-      },
-    };
+    const titles: Record<string, { name: string; desc: string }> = {};
 
     const info = titles[parceiroTab] || {
       name: parceiroTab.toUpperCase(),
@@ -926,56 +1365,129 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
 
   return (
     <div className="p-8 space-y-6 overflow-y-auto flex-1 relative">
-      {/* 1. Top Header com Título e Botões de Ação */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
+      {/* 1. Hero central — a página inteira gira em torno de "Enviar Lista":
+          é o CTA grande e vivo aqui, e some do rodapé enquanto a lista está
+          vazia, aparecendo com uma pequena celebração assim que o 1º nome
+          entra (reforça que a ação principal virou possível). Os outros 3
+          atalhos (cadastrar/importar/anexar) ficam menores, como passos de
+          apoio, não competindo em peso visual com o envio. */}
+      <div className="relative overflow-hidden rounded-2xl border border-[#148296]/15 bg-gradient-to-br from-[#0c4f5d] via-[#106778] to-[#148296] px-6 py-8 sm:px-10 sm:py-10 shadow-lg">
+        {/* Blobs decorativos animados — dão a sensação de "vivo" sem poluir o conteúdo */}
+        <motion.div
+          className="pointer-events-none absolute -top-16 -right-10 w-64 h-64 rounded-full bg-emerald-400/20 blur-3xl"
+          animate={{ scale: [1, 1.15, 1], opacity: [0.5, 0.8, 0.5] }}
+          transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
+        />
+        <motion.div
+          className="pointer-events-none absolute -bottom-20 -left-10 w-72 h-72 rounded-full bg-sky-300/10 blur-3xl"
+          animate={{ scale: [1.1, 1, 1.1], opacity: [0.4, 0.7, 0.4] }}
+          transition={{ duration: 7, repeat: Infinity, ease: 'easeInOut', delay: 0.5 }}
+        />
+
+        <div className="relative flex flex-col items-center text-center gap-1">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 text-white/90 text-[10px] font-bold uppercase tracking-wider mb-2">
+            <Sparkles className="w-3 h-3" />
+            Lista ativa: {nomeLoteVigente}
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
             Ação Limpa Nome ABDCM
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Lista ativa: <strong className="text-slate-800 font-bold">{nomeLoteVigente}</strong>
+          <p className="text-xs sm:text-sm text-white/70 mt-1 max-w-md">
+            Monte a lista de associados e envie com um clique — o PIX é gerado na hora.
           </p>
-        </div>
 
-        {/* Botões do Topo */}
-        <div className="flex items-center gap-2.5 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setShowCadastrarModal(true)}
-            className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <UserPlus className="w-4 h-4" />
-            + Cadastrar Nome
-          </button>
+          {/* Métrica ao vivo da lista sendo montada */}
+          <div className="mt-3 flex items-center gap-2 text-white">
+            <span className="text-3xl font-black tabular-nums">{totalNomes}</span>
+            <div className="text-left">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-white/70 leading-tight">
+                {totalNomes === 1 ? 'nome pronto' : 'nomes prontos'}
+              </p>
+              <p className="text-xs font-bold text-emerald-300 leading-tight">
+                {formatCurrencyBRL(totalValor)}
+              </p>
+            </div>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setShowImportarModal(true)}
-            className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <UploadCloud className="w-4 h-4" />
-            Importar Lista
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowDocumentosModal(true)}
-            className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            Anexar Documentos
-          </button>
-
-          <button
+          {/* CTA central — o botão "Enviar Lista" vivo, com glow pulsante */}
+          <motion.button
             type="button"
             onClick={() => setShowEnviarModal(true)}
-            className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            disabled={totalNomes === 0}
+            whileHover={totalNomes > 0 ? { scale: 1.04 } : undefined}
+            whileTap={totalNomes > 0 ? { scale: 0.97 } : undefined}
+            className="relative mt-5 flex items-center gap-2 px-8 py-3.5 rounded-full text-sm font-black text-[#0c4f5d] bg-white shadow-[0_10px_35px_rgba(0,0,0,0.25)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
+            {totalNomes > 0 && (
+              <motion.span
+                className="absolute inset-0 rounded-full bg-white/70 -z-10"
+                animate={{ scale: [1, 1.25, 1], opacity: [0.6, 0, 0.6] }}
+                transition={{ duration: 2, repeat: Infinity, ease: 'easeOut' }}
+              />
+            )}
             <Send className="w-4 h-4" />
-            Enviar Lista
-          </button>
+            {selectedIds.length > 0 ? `Enviar Selecionados (${selectedIds.length})` : 'Enviar Lista'}
+          </motion.button>
         </div>
       </div>
+
+      {/* Atalhos de apoio (montar a lista) — menores, abaixo do hero */}
+      <div className="flex items-center justify-center gap-2.5 flex-wrap">
+        <button
+          type="button"
+          onClick={() => setShowCadastrarModal(true)}
+          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
+        >
+          <UserPlus className="w-4 h-4" />
+          + Cadastrar Nome
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowImportarModal(true)}
+          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
+        >
+          <UploadCloud className="w-4 h-4" />
+          Importar Lista
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowDocumentosModal(true)}
+          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          Anexar Documentos
+        </button>
+      </div>
+
+      {/* FAB flutuante — mesma ação do hero, sempre alcançável mesmo depois
+          de rolar a página pra baixo até a tabela de nomes. */}
+      <AnimatePresence>
+        {totalNomes > 0 && (
+          <motion.button
+            type="button"
+            onClick={() => setShowEnviarModal(true)}
+            initial={{ scale: 0, opacity: 0, y: 20 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0, opacity: 0, y: 20 }}
+            whileHover={{ scale: 1.06 }}
+            whileTap={{ scale: 0.95 }}
+            className="fixed bottom-8 right-8 z-30 flex items-center gap-2 pl-5 pr-6 py-3.5 rounded-full text-white font-bold text-sm bg-gradient-to-r from-[#148296] to-[#0c4f5d] shadow-[0_8px_30px_rgba(20,130,150,0.5)] cursor-pointer"
+          >
+            <motion.span
+              className="absolute inset-0 rounded-full bg-[#148296] -z-10"
+              animate={{ scale: [1, 1.3, 1], opacity: [0.5, 0, 0.5] }}
+              transition={{ duration: 2.2, repeat: Infinity, ease: 'easeOut' }}
+            />
+            <Send className="w-4 h-4" />
+            Enviar Lista
+            <span className="ml-0.5 px-2 py-0.5 rounded-full bg-white/25 text-xs font-black tabular-nums">
+              {selectedIds.length > 0 ? selectedIds.length : totalNomes}
+            </span>
+          </motion.button>
+        )}
+      </AnimatePresence>
 
       {/* 2. Stepper do Processo (4 Passos do Fluxo Limpa Nome) — cada passo
           fica cinza até ser concluído e só então vira verde (com animação).

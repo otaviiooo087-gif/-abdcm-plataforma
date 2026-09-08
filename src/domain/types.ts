@@ -195,17 +195,91 @@ export interface Servico {
   tenant_id: string;
   nome: string;
   descricao?: string | null;
-  preco: number; // centavos
+  preco: number; // centavos — preço final cobrado do parceiro/associado
+  custo: number; // centavos — custo interno, nunca exibido fora do admin
   prazo_dias: number;
   usa_listas: boolean; // funciona como a Ação Coletiva (com envio de listas) ou não
   ativo: boolean;
+  foto_url?: string | null;
+  link_redirecionamento?: string | null;
   created_at: string;
+}
+
+// Um serviço em destaque por dia da semana — aba Serviços > Marketing.
+export interface MarketingCronogramaDia {
+  id: string;
+  tenant_id: string;
+  dia_semana: number; // 0=domingo..6=sábado
+  servico_id: string | null;
+  ativo: boolean;
+  atualizado_em: string;
+}
+
+export interface MarketingDisparo {
+  id: string;
+  tenant_id: string;
+  servico_id: string;
+  origem: 'manual' | 'automatico';
+  mensagem: string;
+  quantidade_destinatarios: number;
+  disparado_por_user_id?: string | null;
+  disparado_em: string;
+}
+
+// MOCK — ver nota na migration 0012_marketing.sql / CLAUDE.md seção 8.
+export interface MarketingGrupoConfig {
+  tenant_id: string;
+  nome_grupo: string;
+  aviso_lista_ativo: boolean;
+  marketing_ativo: boolean;
+  enquetes_ativo: boolean;
+  atualizado_em: string;
+}
+
+// Mensagem extra por gatilho — aba Automações > "Criar Nova Mensagem".
+export interface MensagemExtra {
+  id: string;
+  tenant_id: string;
+  gatilho: TipoNotificacao;
+  nome: string;
+  mensagem: string;
+  ativo: boolean;
+  created_at: string;
+}
+
+// Automação de ligação — MOCK (ver migration 0013 / CLAUDE.md seção 8).
+export interface ChamadaConfig {
+  id: string;
+  tenant_id: string;
+  servico_id: string | null; // null = Ação Limpa Nome / lotes em geral
+  nome: string;
+  roteiro_abertura: string;
+  roteiro_resposta_sim: string;
+  roteiro_resposta_nao: string;
+  dias_antes_prazo: number | null;
+  ativo: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChamadaLog {
+  id: string;
+  tenant_id: string;
+  config_id: string;
+  servico_id: string | null;
+  associado_id: string | null;
+  telefone: string;
+  resultado: 'sim' | 'nao' | 'sem_resposta';
+  transcricao: string;
+  origem: 'manual' | 'automatico';
+  criado_em: string;
 }
 
 // Contrato-modelo que o admin disponibiliza aos associados/parceiros.
 export interface Contrato {
   id: string;
   tenant_id: string;
+  titulo: string;
   nome_arquivo: string;
   mime_type: string;
   conteudo_base64: string;
@@ -238,7 +312,8 @@ export type TipoNotificacao =
   | 'follow_up_lista'
   | 'status_processo'
   | 'pagamento_pendente'
-  | 'lote_encerrado';
+  | 'lote_encerrado'
+  | 'cadastro_associado';
 
 // Registro de envio (log + chave de deduplicação do motor de automação).
 export interface NotificacaoEnviada {
@@ -255,6 +330,26 @@ export interface NotificacaoEnviada {
   enviado_em: string;
 }
 
+// Dados cadastrais da ABDCM (empresa, conta bancária, OAB) — aba
+// Configurações > Empresa. OAB é pra uma futura integração de
+// monitoramento de processo junto aos tribunais; nenhum provedor real
+// está contratado ainda (mesma doutrina de mock das outras integrações).
+export interface ConfiguracaoEmpresa {
+  tenant_id: string;
+  razao_social: string;
+  cnpj: string;
+  endereco: string;
+  telefone: string;
+  email: string;
+  banco_nome: string;
+  banco_agencia: string;
+  banco_conta: string;
+  banco_pix_chave: string;
+  oab_numero: string;
+  oab_uf: string;
+  atualizado_em: string;
+}
+
 // Liga/desliga e parâmetros de cada regra de automação, editável na aba Automações.
 export interface AutomacaoConfig {
   chave: TipoNotificacao;
@@ -262,4 +357,62 @@ export interface AutomacaoConfig {
   ativo: boolean;
   config: Record<string, unknown>;
   atualizado_em: string;
+}
+
+// Status por órgão (birô de crédito) de um registro já protocolado — camada
+// suplementar de detalhe, não substitui nem cria um 9º ProcessStatus (I3 do
+// CLAUDE.md continua valendo: só os 10 valores fechados). Um registro só
+// tem linhas aqui a partir do momento em que vira "protocolado"; quando
+// todos os órgãos ficam "baixado", o registro inteiro transiciona pra
+// "baixado" (transição já prevista na máquina de estados) e o nada consta
+// é emitido automaticamente.
+export const ORGAOS_BUREAU = ['serasa', 'boa_vista', 'spc', 'cenprot_br', 'cenprot_sp'] as const;
+export type OrgaoBureau = (typeof ORGAOS_BUREAU)[number];
+
+export const ORGAO_BUREAU_LABEL: Record<OrgaoBureau, string> = {
+  serasa: 'Serasa',
+  boa_vista: 'Boa Vista',
+  spc: 'SPC Brasil',
+  cenprot_br: 'Cenprot BR',
+  cenprot_sp: 'Cenprot SP',
+};
+
+export interface RegistroOrgaoStatus {
+  id: string;
+  tenant_id: string;
+  registro_id: string;
+  orgao: OrgaoBureau;
+  status: 'pendente' | 'baixado';
+  baixado_em?: string | null;
+  created_at: string;
+}
+
+export interface NadaConstaEmissao {
+  id: string;
+  tenant_id: string;
+  registro_id: string;
+  associado_id: string;
+  protocolo_consulta: string;
+  documento_base64: string;
+  mime_type: string;
+  emitido_em: string;
+}
+
+// 'anuncio' é publicado pela aba Serviços > Marketing (banner de destaque
+// pro parceiro), não pela aba Eventos e Notícias — mesma tabela, uso separado.
+export type TipoEventoNoticia = 'evento' | 'noticia' | 'anuncio';
+
+export interface EventoNoticia {
+  id: string;
+  tenant_id: string;
+  tipo: TipoEventoNoticia;
+  titulo: string;
+  descricao: string;
+  categoria: string; // ex.: "Live", "Novo Serviço", "Comunicado" — texto livre do admin
+  imagem_url?: string | null;
+  link_externo?: string | null; // ex.: link do Zoom, WhatsApp, página do serviço
+  data_evento?: string | null; // só relevante pra tipo 'evento'
+  ativo: boolean;
+  criado_por_user_id: string;
+  created_at: string;
 }

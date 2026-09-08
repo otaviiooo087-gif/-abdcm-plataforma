@@ -7,12 +7,23 @@ import { AdminProcessosTab } from './admin/AdminProcessosTab.js';
 import { AdminAssociadosTab } from './admin/AdminAssociadosTab.js';
 import { AdminFinanceiroTab } from './admin/AdminFinanceiroTab.js';
 import { AdminConfiguracoesTab } from './admin/AdminConfiguracoesTab.js';
+import { AdminControleAcessoTab } from './admin/AdminControleAcessoTab.js';
 import { AdminDashboardTab } from './admin/AdminDashboardTab.js';
 import { AdminServicosTab } from './admin/AdminServicosTab.js';
+import { AdminEventosTab } from './admin/AdminEventosTab.js';
 import { AdminAutomacoesTab } from './admin/AdminAutomacoesTab.js';
 import { ArrowRightLeft, Search, RefreshCw, Download, Plus, X, Check } from 'lucide-react';
 
-type AdminTab = 'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
+type AdminTab =
+  | 'dashboard'
+  | 'processos'
+  | 'associados'
+  | 'financeiro'
+  | 'servicos'
+  | 'eventos'
+  | 'automacoes'
+  | 'config'
+  | 'controle';
 
 interface AdminConsoleProps {
   activeTab: AdminTab;
@@ -274,6 +285,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ==================================================== */}
       {activeTab === 'servicos' && <AdminServicosTab />}
 
+      {activeTab === 'eventos' && <AdminEventosTab />}
+
       {/* ==================================================== */}
       {/* ABA: AUTOMAÇÕES                                      */}
       {/* ==================================================== */}
@@ -320,6 +333,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ==================================================== */}
       {activeTab === 'controle' && (
         <div className="space-y-6">
+          <AdminControleAcessoTab registros={registros} lotes={lotes} session={session} />
+
           {/* Barra de Filtro de Auditoria com layout idêntico */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3">
             <div className="relative flex-1 max-w-md">

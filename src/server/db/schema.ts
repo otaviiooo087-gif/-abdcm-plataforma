@@ -141,15 +141,93 @@ export const servicos = pgTable('servicos', {
   nome: text('nome').notNull(),
   descricao: text('descricao'),
   preco: integer('preco').notNull(),
+  custo: integer('custo').notNull().default(0),
   prazoDias: integer('prazo_dias').notNull(),
   usaListas: boolean('usa_listas').notNull().default(false),
   ativo: boolean('ativo').notNull().default(true),
+  fotoUrl: text('foto_url'),
+  linkRedirecionamento: text('link_redirecionamento'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Cronograma semanal de marketing (aba Serviços > Marketing) — um serviço
+// em destaque por dia da semana, disparado pelo agendador já existente.
+export const marketingCronograma = pgTable('marketing_cronograma', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  diaSemana: integer('dia_semana').notNull(), // 0=domingo..6=sábado
+  servicoId: text('servico_id'),
+  ativo: boolean('ativo').notNull().default(true),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Histórico de disparos de marketing (manual pelo admin ou automático pelo cronograma).
+export const marketingDisparos = pgTable('marketing_disparos', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  servicoId: text('servico_id').notNull(),
+  origem: text('origem').notNull(), // 'manual' | 'automatico'
+  mensagem: text('mensagem').notNull(),
+  quantidadeDestinatarios: integer('quantidade_destinatarios').notNull(),
+  disparadoPorUserId: text('disparado_por_user_id'),
+  disparadoEm: timestamp('disparado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Config do robô de grupos de WhatsApp — MOCK (ver nota na migration 0012):
+// nenhum provedor real de grupo/enquete está contratado ainda.
+export const marketingGrupoConfig = pgTable('marketing_grupo_config', {
+  tenantId: text('tenant_id').primaryKey(),
+  nomeGrupo: text('nome_grupo').notNull().default(''),
+  avisoListaAtivo: boolean('aviso_lista_ativo').notNull().default(false),
+  marketingAtivo: boolean('marketing_ativo').notNull().default(false),
+  enquetesAtivo: boolean('enquetes_ativo').notNull().default(false),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Mensagens extras por gatilho — aba Automações > "Criar Nova Mensagem".
+export const mensagensExtra = pgTable('mensagens_extra', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  gatilho: text('gatilho').notNull(),
+  nome: text('nome').notNull(),
+  mensagem: text('mensagem').notNull(),
+  ativo: boolean('ativo').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Automação de ligação — MOCK (ver nota na migration 0013): nenhum
+// provedor de telefonia/IVR está contratado ainda.
+export const chamadasConfig = pgTable('chamadas_config', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  servicoId: text('servico_id'),
+  nome: text('nome').notNull(),
+  roteiroAbertura: text('roteiro_abertura').notNull(),
+  roteiroRespostaSim: text('roteiro_resposta_sim').notNull(),
+  roteiroRespostaNao: text('roteiro_resposta_nao').notNull(),
+  diasAntesPrazo: integer('dias_antes_prazo'),
+  ativo: boolean('ativo').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const chamadasLog = pgTable('chamadas_log', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  configId: text('config_id').notNull(),
+  servicoId: text('servico_id'),
+  associadoId: text('associado_id'),
+  telefone: text('telefone').notNull(),
+  resultado: text('resultado').notNull(),
+  transcricao: text('transcricao').notNull(),
+  origem: text('origem').notNull().default('manual'),
+  criadoEm: timestamp('criado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
 export const contratos = pgTable('contratos', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull(),
+  titulo: text('titulo').notNull().default('Contrato Limpa Nome'),
   nomeArquivo: text('nome_arquivo').notNull(),
   mimeType: text('mime_type').notNull(),
   conteudoBase64: text('conteudo_base64').notNull(),
@@ -197,6 +275,71 @@ export const documentosAssociado = pgTable('documentos_associado', {
   tamanhoBytes: integer('tamanho_bytes'),
   enviadoPorUserId: text('enviado_por_user_id'),
   enviadoEm: timestamp('enviado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const usuarios = pgTable('usuarios', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  nome: text('nome').notNull(),
+  email: text('email').notNull(),
+  senhaHash: text('senha_hash').notNull(),
+  role: text('role').notNull(),
+  parceiroId: text('parceiro_id'),
+  partnerCode: text('partner_code'),
+  ativo: boolean('ativo').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const configuracaoEmpresa = pgTable('configuracao_empresa', {
+  tenantId: text('tenant_id').primaryKey(),
+  razaoSocial: text('razao_social').notNull().default(''),
+  cnpj: text('cnpj').notNull().default(''),
+  endereco: text('endereco').notNull().default(''),
+  telefone: text('telefone').notNull().default(''),
+  email: text('email').notNull().default(''),
+  bancoNome: text('banco_nome').notNull().default(''),
+  bancoAgencia: text('banco_agencia').notNull().default(''),
+  bancoConta: text('banco_conta').notNull().default(''),
+  bancoPixChave: text('banco_pix_chave').notNull().default(''),
+  oabNumero: text('oab_numero').notNull().default(''),
+  oabUf: text('oab_uf').notNull().default(''),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const registroOrgaos = pgTable('registro_orgaos', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  registroId: text('registro_id').notNull(),
+  orgao: text('orgao').notNull(),
+  status: text('status').notNull().default('pendente'),
+  baixadoEm: timestamp('baixado_em', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const nadaConstaEmissoes = pgTable('nada_consta_emissoes', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  registroId: text('registro_id').notNull(),
+  associadoId: text('associado_id').notNull(),
+  protocoloConsulta: text('protocolo_consulta').notNull(),
+  documentoBase64: text('documento_base64').notNull(),
+  mimeType: text('mime_type').notNull(),
+  emitidoEm: timestamp('emitido_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const eventosNoticias = pgTable('eventos_noticias', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  tipo: text('tipo').notNull(),
+  titulo: text('titulo').notNull(),
+  descricao: text('descricao').notNull(),
+  categoria: text('categoria').notNull(),
+  imagemUrl: text('imagem_url'),
+  linkExterno: text('link_externo'),
+  dataEvento: timestamp('data_evento', { withTimezone: true, mode: 'string' }),
+  ativo: boolean('ativo').notNull().default(true),
+  criadoPorUserId: text('criado_por_user_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
 export const automacoesConfig = pgTable('automacoes_config', {
