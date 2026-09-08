@@ -12,6 +12,8 @@ import { ConsultaPublica } from './components/ConsultaPublica.js';
 import { TimelineModal } from './components/TimelineModal.js';
 import { TransitionModal } from './components/TransitionModal.js';
 import { LoginPage } from './components/LoginPage.js';
+import { LoteConcluidoCelebration } from './components/LoteConcluidoCelebration.js';
+import { ProcessoToasts } from './components/ProcessoToasts.js';
 import { Lote, Registro, Associado, Submissao, AuditLog, UserRole } from './domain/types.js';
 import { UserSession } from './server/mockData.js';
 
@@ -83,6 +85,25 @@ export default function App() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Atualização periódica de lotes/registros — é o que alimenta os toasts
+  // de mudança de status (ProcessoToasts) e a checagem de lote concluído
+  // (LoteConcluidoCelebration) com dado que pode ter mudado sem o usuário
+  // ter feito nada na tela (ex.: admin protocolou, birô deu baixa).
+  useEffect(() => {
+    if (!sessionLoaded || (!session?.autenticado && !demoModeChosen)) return;
+    const interval = setInterval(() => {
+      fetch('/api/lotes')
+        .then((res) => res.json())
+        .then(setLotes)
+        .catch(() => {});
+      fetch('/api/registros')
+        .then((res) => res.json())
+        .then(setRegistros)
+        .catch(() => {});
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [sessionLoaded, session?.autenticado, demoModeChosen]);
 
   const handleSwitchRole = async (role: UserRole) => {
     try {
@@ -235,6 +256,23 @@ export default function App() {
           loadData();
         }}
       />
+
+      {/* Comemoração de lote concluído + toasts de mudança de status —
+          só fazem sentido pro parceiro, que é quem acompanha "seus" nomes */}
+      {session?.role === 'parceiro' && (
+        <>
+          <LoteConcluidoCelebration
+            lotes={lotes}
+            registros={registros}
+            parceiroId={session?.parceiro_id}
+            onEmitirNadaConsta={() => {
+              setCurrentSurface('parceiro');
+              setParceiroTab('minhas-listas');
+            }}
+          />
+          <ProcessoToasts registros={registros} parceiroId={session?.parceiro_id} />
+        </>
+      )}
     </div>
   );
 }
