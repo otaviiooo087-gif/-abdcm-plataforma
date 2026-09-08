@@ -4,6 +4,7 @@ import { StatusDocumentos } from '../../lib/documentos/index.js';
 import { Download, Search, Calendar, Eye, BadgeCheck } from 'lucide-react';
 import { NomesDaListaModal } from './NomesDaListaModal.js';
 import { OrgaoLogoBadge } from '../shared/OrgaoLogoBadge.js';
+import { LoteStatusCountdown } from './LoteStatusCountdown.js';
 
 interface ListaEnviada {
   id: string;
@@ -251,8 +252,17 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
               protocolados.length > 0 && protocolados.every((r) => statusOrgaos[r.id]?.find((o) => o.orgao === orgao)?.status === 'baixado');
             const todosNadaConstaProntos = nomesDaLista.length > 0 && nomesDaLista.every((r) => nadaConsta[r.id]);
 
+            const concluida = lote?.status === 'concluido';
+
             return (
-              <div key={sub.id} className="bg-white rounded-xl border border-slate-200 shadow-2xs p-4 flex flex-col gap-3">
+              <div
+                key={sub.id}
+                className={`rounded-xl border shadow-2xs p-4 flex flex-col gap-3 transition-colors ${
+                  concluida
+                    ? 'bg-gradient-to-br from-white via-emerald-50/40 to-amber-50/40 border-emerald-200'
+                    : 'bg-white border-slate-200'
+                }`}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <h4 className="text-sm font-bold text-slate-900 truncate">{lote?.nome || 'Ação Coletiva'}</h4>
@@ -260,6 +270,8 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
                   </div>
                   {faseBadge(fase)}
                 </div>
+
+                <LoteStatusCountdown lote={lote} />
 
                 <div className="flex items-center justify-between text-[11px] text-slate-500 gap-2">
                   <span className="flex items-center gap-1.5 min-w-0">
@@ -274,7 +286,8 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
                     <OrgaoLogoBadge
                       key={orgao}
                       orgao={orgao}
-                      baixado={orgaoBaixadoParaTodos(orgao)}
+                      baixado={concluida || orgaoBaixadoParaTodos(orgao)}
+                      glow={concluida}
                       size="sm"
                       showLabel={false}
                       className="p-1 border-0 bg-transparent"
@@ -283,10 +296,14 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
                 </div>
 
                 {todosNadaConstaProntos && (
-                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-700">
+                  <button
+                    type="button"
+                    onClick={() => setModalSubmissaoId(sub.id)}
+                    className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-[11px] font-bold text-emerald-700 cursor-pointer transition-colors"
+                  >
                     <BadgeCheck className="w-3.5 h-3.5 shrink-0" />
-                    Seus nada consta estão disponíveis
-                  </div>
+                    Emitir Seu Nada Consta
+                  </button>
                 )}
 
                 <button
