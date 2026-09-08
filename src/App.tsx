@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar.js';
 import { Header } from './components/Header.js';
 import { ParceiroPortal } from './components/ParceiroPortal.js';
@@ -44,6 +44,9 @@ export default function App() {
   const [submissoes, setSubmissoes] = useState<Submissao[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [notificacoes, setNotificacoes] = useState<
+    { id: string; titulo: string; mensagem: string; ocorridoEm: string; lida: boolean }[]
+  >([]);
 
   // Modals
   const [timelineRegistro, setTimelineRegistro] = useState<Registro | null>(null);
@@ -103,6 +106,60 @@ export default function App() {
         .catch(() => {});
     }, 20000);
     return () => clearInterval(interval);
+  }, [sessionLoaded, session?.autenticado, demoModeChosen]);
+
+  // Tempo real: o servidor avisa por SSE assim que algo muda (pagamento
+  // confirmado, lote encerrado, órgão deu baixa...) e a gente recarrega na
+  // hora, em vez de esperar até 20s do poll acima — que continua existindo
+  // como rede de segurança (reconexão de aba, evento perdido). Um evento
+  // nunca carrega o dado em si, só avisa "algo mudou" — quem decide o que
+  // esta sessão pode ver continua sendo a rota GET de sempre (I1).
+  const loadDataRef = useRef(loadData);
+  loadDataRef.current = loadData;
+  useEffect(() => {
+    if (!sessionLoaded || (!session?.autenticado && !demoModeChosen)) return;
+
+    const source = new EventSource('/api/eventos/stream');
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const recarregarLogo = () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => loadDataRef.current(), 250);
+    };
+
+    source.onmessage = (ev) => {
+      try {
+        const evento = JSON.parse(ev.data) as {
+          categoria: string;
+          notificacao?: { titulo: string; mensagem: string };
+        };
+        recarregarLogo();
+        if (evento.notificacao) {
+          setNotificacoes((prev) =>
+            [
+              {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                titulo: evento.notificacao!.titulo,
+                mensagem: evento.notificacao!.mensagem,
+                ocorridoEm: new Date().toISOString(),
+                lida: false,
+              },
+              ...prev,
+            ].slice(0, 20),
+          );
+        }
+      } catch {
+        // evento malformado — ignora, o poll de 20s ainda garante consistência
+      }
+    };
+    source.onerror = () => {
+      // EventSource já reconecta sozinho por padrão — nada a fazer aqui
+      // além de deixar o poll de 20s como rede de segurança nesse meio-tempo.
+    };
+
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      source.close();
+    };
   }, [sessionLoaded, session?.autenticado, demoModeChosen]);
 
   const handleSwitchRole = async (role: UserRole) => {
@@ -207,6 +264,8 @@ export default function App() {
           onLogout={handleLogout}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
+          notificacoes={notificacoes}
+          onAbrirNotificacoes={() => setNotificacoes((prev) => prev.map((n) => ({ ...n, lida: true })))}
         />
 
         {/* Superfícies */}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StatusBadge } from './StatusBadge.js';
 import { Search, ShieldCheck, Clock, FileCheck, ArrowRight } from 'lucide-react';
 
@@ -27,6 +27,17 @@ export const ConsultaPublica: React.FC = () => {
   const [results, setResults] = useState<PublicResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const buscar = async (cpfCnpj: string, protocolo: string) => {
+    const res = await fetch('/api/consulta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cpf_cnpj: cpfCnpj, protocol_code: protocolo }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Nenhum registro localizado.');
+    return data.results as PublicResult[];
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!docInput.trim() && !protInput.trim()) {
@@ -39,26 +50,35 @@ export const ConsultaPublica: React.FC = () => {
     setResults(null);
 
     try {
-      const res = await fetch('/api/consulta', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cpf_cnpj: docInput.trim(),
-          protocol_code: protInput.trim(),
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Nenhum registro localizado.');
-      }
-      setResults(data.results);
+      setResults(await buscar(docInput.trim(), protInput.trim()));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Erro na consulta.');
     } finally {
       setLoading(false);
     }
   };
+
+  // Enquanto a pessoa está com o resultado na tela, refaz a mesma consulta
+  // de tempos em tempos — se o status mudar nesse meio-tempo (ex.: órgão deu
+  // baixa), ela vê sem precisar apertar "Consultar Processo" de novo. Sem
+  // spinner nem mensagem de erro nessas rodadas silenciosas: um soluço de
+  // rede aqui não deve incomodar quem só está acompanhando; a próxima
+  // rodada tenta de novo sozinha.
+  const ultimaBuscaRef = useRef({ doc: '', prot: '' });
+  useEffect(() => {
+    if (!results || results.length === 0) return;
+    ultimaBuscaRef.current = { doc: docInput.trim(), prot: protInput.trim() };
+    const interval = setInterval(async () => {
+      try {
+        const atualizado = await buscar(ultimaBuscaRef.current.doc, ultimaBuscaRef.current.prot);
+        setResults(atualizado);
+      } catch {
+        // silencioso — tenta de novo na próxima rodada
+      }
+    }, 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [results !== null]);
 
   return (
     <div className="p-6 sm:p-8 max-w-4xl mx-auto space-y-8 overflow-y-auto flex-1">
