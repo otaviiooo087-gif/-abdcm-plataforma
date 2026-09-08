@@ -677,7 +677,7 @@ async function submitBatch(
     await tx.insert(schema.submissoes).values({
       id: submissaoId,
       tenantId: ABDCM_TENANT_ID,
-      parceiroId: 'parc-001',
+      parceiroId: getSession().parceiro_id || 'parc-001',
       loteId: lote?.id ?? 'lote-124',
       nomesCount: registroIds.length,
       valorTotal: registroIds.length * precoUnitario,
@@ -1065,6 +1065,11 @@ async function addRegistro(data: {
   const limpo = data.cpf_cnpj.replace(/\D/g, '');
   const isCnpj = limpo.length > 11;
   const tipo = data.tipo_documento ?? (isCnpj ? 'cnpj' : 'cpf');
+  // Dono real do cadastro: o parceiro da sessão atual (login real ou troca
+  // de papel de demonstração) — nunca um id fixo, senão nomes cadastrados
+  // por um parceiro logado de verdade ficam invisíveis pra ele mesmo depois
+  // (GET /api/registros filtra por session.parceiro_id pra quem é parceiro).
+  const parceiroId = getSession().parceiro_id || 'parc-001';
   const loteVigente = data.lote_id ? undefined : await resolverLoteVigente();
   const loteId = data.lote_id ?? loteVigente?.id ?? 'lote-124';
   const precoUnitario = loteVigente?.precoPorNome ?? 25000;
@@ -1107,7 +1112,7 @@ async function addRegistro(data: {
     await db().insert(schema.associados).values({
       id: associadoId,
       tenantId: ABDCM_TENANT_ID,
-      parceiroId: 'parc-001',
+      parceiroId,
       nome: data.nome.trim(),
       cpfCnpjRaw: limpo,
       cpfCnpj: maskDocument(limpo),
@@ -1122,7 +1127,7 @@ async function addRegistro(data: {
     id,
     tenantId: ABDCM_TENANT_ID,
     loteId,
-    parceiroId: 'parc-001',
+    parceiroId,
     associadoId,
     nome: data.nome.trim(),
     cpfCnpjRaw: limpo,
