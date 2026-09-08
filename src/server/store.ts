@@ -54,6 +54,7 @@ import { getStorageProvider, storageProviderConfigurado } from '../integrations/
 import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integrations/whatsapp/index.js';
 import { getOcrProvider } from '../integrations/ocr/index.js';
 import { gerarFichaAssociativaPdf } from '../domain/associados/ficha.js';
+import { emitirEvento } from './eventBus.js';
 import { hashPassword, verifyPassword } from './auth/password.js';
 import { criarTokenSessao } from './auth/session.js';
 import { sessaoRealAtual } from './auth/context.js';
@@ -756,6 +757,8 @@ async function submitBatch(
     console.error(`Falha ao gerar PIX pra submissão ${submissao.id}:`, err);
   }
 
+  emitirEvento({ categoria: 'registros', parceiroId: submissao.parceiro_id });
+  emitirEvento({ categoria: 'submissoes', parceiroId: submissao.parceiro_id });
   return { submissao, registros, pixCobranca };
 }
 
@@ -809,7 +812,16 @@ async function paySubmissao(
     }
 
     const [submissaoRow] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
-    return { submissao: submissaoDeLinha(submissaoRow!), registros: atualizados };
+    const submissaoFinal = submissaoDeLinha(submissaoRow!);
+    return { submissao: submissaoFinal, registros: atualizados };
+  }).then((resultado) => {
+    emitirEvento({ categoria: 'submissoes', parceiroId: resultado.submissao.parceiro_id });
+    emitirEvento({
+      categoria: 'registros',
+      parceiroId: resultado.submissao.parceiro_id,
+      notificacao: { titulo: 'Pagamento confirmado', mensagem: `${resultado.registros.length} nome(s) da AÇÃO COLETIVA foram pagos e seguem pro protocolo.` },
+    });
+    return resultado;
   });
 }
 
@@ -817,7 +829,10 @@ async function paySubmissao(
  * Recebe o webhook do provedor de PIX, valida e — se for confirmação de
  * pagamento — casa com a cobrança pelo txid e chama paySubmissao (que já é
  * idempotente). Webhook fora de ordem ou de uma cobrança não confirmada
- * (pendente/expirado) não altera nada.
+ * (pendente/expirado) não altera nada. Uma cobrança que já tinha sido
+ * marcada expirada/cancelada (ver marcarPixExpirado) e recebe um "pago"
+ * atrasado NÃO confirma sozinha — cai na fila de conciliação pra um humano
+ * decidir, exatamente como um comprovante divergente (I3/I11).
  */
 async function confirmarPagamentoPixWebhook(
   payload: unknown,
@@ -829,7 +844,140 @@ async function confirmarPagamentoPixWebhook(
   const [cobranca] = await db().select().from(schema.pixCobrancas).where(eq(schema.pixCobrancas.txid, evento.txid));
   if (!cobranca) throw new Error(`Cobrança PIX com txid "${evento.txid}" não encontrada.`);
 
+  if (cobranca.status === 'expirado' || cobranca.status === 'cancelado') {
+    await registrarDivergenciaPagamento(
+      cobranca.submissaoId,
+      'webhook_pix',
+      `Webhook de pagamento confirmado chegou depois da cobrança já estar "${cobranca.status}" — requer conferência manual antes de liberar.`,
+    );
+    return null;
+  }
+
   return paySubmissao(cobranca.submissaoId, 'system-pix');
+}
+
+/** Marca uma cobrança PIX (e a submissão, se ainda estiver pendente — outro
+ * caminho pode ter confirmado o pagamento enquanto isso) como expirada ou
+ * cancelada. Depois disso a cobrança sai do radar de reconciliarPixPendentes
+ * (só olha status='pendente') — se um pagamento chegar depois, cai em
+ * registrarDivergenciaPagamento, nunca confirma sozinho. */
+async function marcarPixExpirado(cobrancaId: string, submissaoId: string, status: 'expirado' | 'cancelado'): Promise<void> {
+  await db().update(schema.pixCobrancas).set({ status }).where(eq(schema.pixCobrancas.id, cobrancaId));
+  const [atualizada] = await db()
+    .update(schema.submissoes)
+    .set({ paymentStatus: status === 'cancelado' ? 'cancelado' : 'expirado' })
+    .where(and(eq(schema.submissoes.id, submissaoId), eq(schema.submissoes.paymentStatus, 'pendente')))
+    .returning({ parceiroId: schema.submissoes.parceiroId });
+  if (atualizada) emitirEvento({ categoria: 'submissoes', parceiroId: atualizada.parceiroId });
+}
+
+/** Pagamento chegou (via webhook ou reconciliação) pra uma submissão cuja
+ * cobrança já não estava mais pendente (expirou ou foi cancelada) — em vez
+ * de confirmar sozinho, volta pra fila de conciliação (paymentStatus
+ * "pendente" de novo, registros em "aguardando_pagamento") com o motivo
+ * registrado, pra um humano decidir (I3: sem confirmação automática de
+ * dinheiro fora do fluxo esperado). Idempotente: se a submissão já foi paga
+ * por outro caminho enquanto isso, não reabre nada. */
+async function registrarDivergenciaPagamento(submissaoId: string, origem: string, motivo: string): Promise<void> {
+  const resultado = await db().transaction(async (tx) => {
+    const [sub] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
+    if (!sub || sub.paymentStatus === 'pago') return null;
+
+    const now = new Date().toISOString();
+    await tx
+      .update(schema.submissoes)
+      .set({ paymentStatus: 'pendente', motivoObservacao: motivo })
+      .where(eq(schema.submissoes.id, submissaoId));
+
+    const afetados = await tx
+      .select()
+      .from(schema.registros)
+      .where(and(eq(schema.registros.submissaoId, submissaoId), eq(schema.registros.processStatus, 'enviado')));
+
+    for (const atual of afetados) {
+      await tx
+        .update(schema.registros)
+        .set({ processStatus: 'aguardando_pagamento', updatedAt: now })
+        .where(eq(schema.registros.id, atual.id));
+
+      await tx.insert(schema.processEvents).values({
+        id: novoId('pe'),
+        tenantId: atual.tenantId,
+        registroId: atual.id,
+        deStatus: atual.processStatus,
+        paraStatus: 'aguardando_pagamento',
+        atorTipo: 'system',
+        atorUserId: 'system-pix-reconciliacao',
+        motivo,
+        metadata: { submissao_id: submissaoId, origem },
+        ocorridoEm: now,
+      });
+    }
+
+    await tx.insert(schema.auditLog).values({
+      id: novoId('audit'),
+      tenantId: sub.tenantId,
+      atorUserId: 'system-pix-reconciliacao',
+      acao: 'PIX_DIVERGENTE_POS_EXPIRACAO',
+      entidadeTipo: 'submissoes',
+      entidadeId: submissaoId,
+      depois: { motivo, origem },
+      ip: '127.0.0.1',
+      userAgent: 'ABDCM-Reconciliacao-PIX',
+      ocorridoEm: now,
+    });
+
+    return sub.parceiroId;
+  });
+
+  if (resultado) {
+    emitirEvento({
+      categoria: 'submissoes',
+      parceiroId: resultado,
+      notificacao: { titulo: 'Pagamento fora do prazo', mensagem: 'Um PIX pago depois do vencimento caiu na fila de conciliação pra conferência manual.' },
+    });
+  }
+}
+
+export interface ResultadoReconciliacaoPix {
+  verificadas: number;
+  confirmadas: number;
+  expiradas: number;
+}
+
+/** Consulta ativamente o provedor de PIX pra cada cobrança ainda pendente,
+ * em vez de esperar só pelo webhook — cobre o caso de webhook perdido/atrasado
+ * e resolve cobranças que passaram do prazo sem confirmação. Roda em
+ * intervalo curto (ver server.ts) porque é isso que faz o QR Code virar
+ * "pago" na tela do parceiro sem precisar do webhook chegar. Idempotente e
+ * seguro de rodar em paralelo com o webhook — paySubmissao já lida com
+ * dupla confirmação. */
+async function reconciliarPixPendentes(): Promise<ResultadoReconciliacaoPix> {
+  const provider = getPixProvider();
+  const pendentes = await db().select().from(schema.pixCobrancas).where(eq(schema.pixCobrancas.status, 'pendente'));
+  const agora = new Date();
+  let confirmadas = 0;
+  let expiradas = 0;
+
+  for (const cobranca of pendentes) {
+    try {
+      const passouDoPrazo = new Date(cobranca.expiraEm) < agora;
+      const status = passouDoPrazo ? 'expirado' : await provider.consultarCobranca(cobranca.txid);
+
+      if (status === 'pago') {
+        await paySubmissao(cobranca.submissaoId, 'system-pix-reconciliacao');
+        confirmadas++;
+      } else if (status === 'expirado' || status === 'cancelado') {
+        await marcarPixExpirado(cobranca.id, cobranca.submissaoId, status);
+        expiradas++;
+      }
+      // 'pendente' — nada muda, tenta de novo na próxima rodada.
+    } catch (err) {
+      console.error(`[reconciliarPixPendentes] falha ao verificar cobrança ${cobranca.id}:`, err);
+    }
+  }
+
+  return { verificadas: pendentes.length, confirmadas, expiradas };
 }
 
 /** Aprova submissão na conciliação bancária. */
@@ -912,6 +1060,10 @@ async function reproveSubmissao(
 
     const [submissaoRow] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
     return { submissao: submissaoDeLinha(submissaoRow!), registros: atualizados };
+  }).then((resultado) => {
+    emitirEvento({ categoria: 'submissoes', parceiroId: resultado.submissao.parceiro_id });
+    emitirEvento({ categoria: 'registros', parceiroId: resultado.submissao.parceiro_id });
+    return resultado;
   });
 }
 
@@ -981,6 +1133,10 @@ async function attachComprovante(
 
     const [submissaoRow] = await tx.select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
     return submissaoDeLinha(submissaoRow!);
+  }).then((submissao) => {
+    emitirEvento({ categoria: 'submissoes', parceiroId: submissao.parceiro_id });
+    emitirEvento({ categoria: 'registros', parceiroId: submissao.parceiro_id });
+    return submissao;
   });
 }
 
@@ -1039,6 +1195,10 @@ async function cancelSubmissao(
     // o delete abaixo esbarra na constraint e a submissão nunca é cancelada.
     await tx.delete(schema.pixCobrancas).where(eq(schema.pixCobrancas.submissaoId, submissaoId));
     await tx.delete(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
+    return submissao.parceiroId;
+  }).then((parceiroId) => {
+    emitirEvento({ categoria: 'submissoes', parceiroId });
+    emitirEvento({ categoria: 'registros', parceiroId });
   });
 }
 
@@ -1490,6 +1650,9 @@ async function transitionStatus(
     });
 
     return { registro: registroDeLinha({ ...atual, ...campos }), event: processEvent };
+  }).then((resultado) => {
+    emitirEvento({ categoria: 'registros', parceiroId: resultado.registro.parceiro_id });
+    return resultado;
   });
 }
 
@@ -1618,6 +1781,11 @@ async function marcarOrgaoBaixado(
   if (todosBaixados) {
     await transitionStatus(registroId, 'baixado', 'Todos os órgãos deram baixa', atorUserId, 'system');
     await emitirNadaConsta(registroId);
+  } else {
+    // transitionStatus (acima) já avisa quando o registro inteiro vira
+    // "baixado" — aqui é só a baixa parcial de um órgão, que também precisa
+    // aparecer na hora no popup "Ver nomes anexados" do parceiro.
+    emitirEvento({ categoria: 'registros', parceiroId: reg.parceiroId });
   }
 
   return { orgaos, registroFoiBaixado: todosBaixados };
@@ -1754,6 +1922,7 @@ async function updateLote(
     ocorridoEm: new Date().toISOString(),
   });
 
+  emitirEvento({ categoria: 'lotes' });
   return loteDeLinha({ ...atual, ...patch });
 }
 
@@ -1821,6 +1990,7 @@ async function createLote(
     ocorridoEm: agora,
   });
 
+  emitirEvento({ categoria: 'lotes' });
   return loteDeLinha(linha);
 }
 
@@ -1874,6 +2044,7 @@ async function createContestacao(data: {
   };
 
   await db().insert(schema.contestacoes).values(novo);
+  emitirEvento({ categoria: 'contestacoes' });
   return contestacaoDeLinha(novo as ContestacaoRow);
 }
 
@@ -3375,6 +3546,10 @@ async function encerrarLote(loteId: string, atorUserId: string): Promise<Resulta
     console.error('[encerrarLote] falha ao processar aviso de WhatsApp:', err);
   }
 
+  // Sem parceiroId: encerramento de lote é global, todo parceiro com nome
+  // ali dentro precisa ver o card de "Minhas Listas" mudar de status na hora.
+  emitirEvento({ categoria: 'lotes' });
+
   return {
     lote: loteDeLinha({ ...loteRow, status: 'encerrado' }),
     totalNomes: registrosDoLote.length,
@@ -3457,6 +3632,7 @@ export const serverStore = {
   updateEventoNoticia,
   deleteEventoNoticia,
   confirmarPagamentoPixWebhook,
+  reconciliarPixPendentes,
   getPixCobrancaPorSubmissao,
   getAutomacoesConfig,
   setAutomacaoConfig,

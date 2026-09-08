@@ -18,6 +18,7 @@ import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integratio
 import { ocrProviderConfigurado } from './src/integrations/ocr/index';
 import type { Registro, OrgaoBureau } from './src/domain/types';
 import { promises as fs } from 'node:fs';
+import { onEvento, type EventoTempoReal } from './src/server/eventBus';
 
 function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -375,6 +376,37 @@ async function startServer() {
       return;
     }
     res.json(todos);
+  });
+
+  // 3.5 Eventos em tempo real (Server-Sent Events) — avisa o navegador que
+  // algo mudou (pagamento, lote, documento...) pra ele refazer o fetch na
+  // hora, em vez de esperar o próximo poll. Nunca carrega o dado em si no
+  // evento — quem decide o que a sessão pode ver continua sendo a rota GET
+  // de sempre (I1); isso aqui só avisa "vai buscar de novo".
+  app.get('/api/eventos/stream', (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 4000\n\n');
+
+    const enviar = (evento: EventoTempoReal) => {
+      // Parceiro só recebe evento do próprio parceiro_id ou sem dono
+      // (relevante pra todo mundo, ex.: lote mudou de status).
+      if (session.role === 'parceiro' && evento.parceiroId && evento.parceiroId !== session.parceiro_id) return;
+      res.write(`data: ${JSON.stringify(evento)}\n\n`);
+    };
+    const cancelar = onEvento(enviar);
+
+    const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 25_000);
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      cancelar();
+    });
   });
 
   // 4. Registros
@@ -1467,6 +1499,15 @@ async function startServer() {
     rodarTudo();
     setInterval(rodarTudo, INTERVALO_AUTOMACOES_MS);
   }, 30_000);
+
+  // Reconciliação ativa de PIX — intervalo bem mais curto que o das
+  // automações de WhatsApp porque é isso que faz o QR Code virar "pago" na
+  // tela do parceiro sem depender só do webhook chegar. Backup do webhook,
+  // não substituto (ver reconciliarPixPendentes em store.ts).
+  const INTERVALO_RECONCILIACAO_PIX_MS = 30 * 1000; // 30 segundos
+  setInterval(() => {
+    serverStore.reconciliarPixPendentes().catch((err) => console.error('[reconciliacao-pix] falha na rodada:', err));
+  }, INTERVALO_RECONCILIACAO_PIX_MS);
 }
 
 startServer();

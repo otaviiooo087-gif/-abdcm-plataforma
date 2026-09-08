@@ -1,7 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { UserRole } from '../domain/types.js';
 import { UserSession } from '../server/mockData.js';
-import { Shield, Bell, HelpCircle, Users, Menu, User, Layers, ArrowLeftRight, LogOut } from 'lucide-react';
+import { Shield, Bell, HelpCircle, Users, Menu, User, Layers, ArrowLeftRight, LogOut, X } from 'lucide-react';
+
+interface NotificacaoHeader {
+  id: string;
+  titulo: string;
+  mensagem: string;
+  ocorridoEm: string;
+  lida: boolean;
+}
 
 interface HeaderProps {
   currentSurface: 'parceiro' | 'admin' | 'publico';
@@ -11,6 +19,18 @@ interface HeaderProps {
   onLogout?: () => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
+  notificacoes?: NotificacaoHeader[];
+  onAbrirNotificacoes?: () => void;
+}
+
+function tempoRelativo(iso: string): string {
+  const segundos = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (segundos < 60) return 'agora';
+  const minutos = Math.floor(segundos / 60);
+  if (minutos < 60) return `há ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `há ${horas}h`;
+  return `há ${Math.floor(horas / 24)}d`;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -19,7 +39,11 @@ export const Header: React.FC<HeaderProps> = ({
   session,
   onSwitchRole,
   onLogout,
+  notificacoes = [],
+  onAbrirNotificacoes,
 }) => {
+  const [sinoAberto, setSinoAberto] = useState(false);
+  const naoLidas = notificacoes.filter((n) => !n.lida).length;
   const getSurfaceLabel = () => {
     switch (currentSurface) {
       case 'admin':
@@ -122,6 +146,55 @@ export const Header: React.FC<HeaderProps> = ({
             </select>
           </div>
         )}
+
+        {/* Sino de Notificações — eventos em tempo real desta sessão (SSE) */}
+        <div className="relative">
+          <button
+            title="Notificações"
+            onClick={() => {
+              const abrindo = !sinoAberto;
+              setSinoAberto(abrindo);
+              if (abrindo) onAbrirNotificacoes?.();
+            }}
+            className="relative p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer abdcm-glow"
+          >
+            <Bell className="w-4.5 h-4.5" />
+            {naoLidas > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center leading-none">
+                {naoLidas > 9 ? '9+' : naoLidas}
+              </span>
+            )}
+          </button>
+
+          {sinoAberto && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setSinoAberto(false)} />
+              <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl border border-slate-200 shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800">Notificações</span>
+                  <button onClick={() => setSinoAberto(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                  {notificacoes.length === 0 ? (
+                    <p className="px-4 py-8 text-center text-xs text-slate-400">
+                      Nenhuma notificação por enquanto — avisos de pagamento, lote e status aparecem aqui na hora.
+                    </p>
+                  ) : (
+                    notificacoes.map((n) => (
+                      <div key={n.id} className="px-4 py-3 hover:bg-slate-50">
+                        <p className="text-xs font-bold text-slate-800">{n.titulo}</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">{n.mensagem}</p>
+                        <p className="text-[10px] text-slate-400 mt-1">{tempoRelativo(n.ocorridoEm)}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
 
         {/* User Profile Pill */}
         <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
