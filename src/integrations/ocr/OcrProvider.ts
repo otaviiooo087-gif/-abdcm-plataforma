@@ -26,9 +26,10 @@ export interface DocumentoLido {
   nome: string | null;
   cpf: string | null;
   /** Tipo do documento identificado na própria imagem — o parceiro não
-   * precisa mais dizer se é CNH ou RG antes de enviar, o sistema classifica
-   * sozinho. null quando não dá pra saber com clareza (cai pra escolha manual). */
-  tipoDocumento: 'cnh' | 'rg' | null;
+   * precisa mais dizer se é CNH, RG ou Ficha Associativa antes de enviar, o
+   * sistema classifica sozinho. null quando não dá pra saber com clareza
+   * (cai pra escolha manual). */
+  tipoDocumento: 'cnh' | 'rg' | 'ficha_associativa' | null;
   /** 'alta' só quando o CPF foi lido com todos os 11 dígitos claros e sem ambiguidade. */
   confianca: 'alta' | 'baixa';
 }

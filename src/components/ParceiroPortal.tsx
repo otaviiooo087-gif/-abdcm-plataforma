@@ -1328,6 +1328,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         isOpen={showImportarModal}
         onClose={() => setShowImportarModal(false)}
         onSuccess={() => onRefreshData?.()}
+        nomeLoteVigente={nomeLoteVigente}
       />
 
       <EnviarListaModal

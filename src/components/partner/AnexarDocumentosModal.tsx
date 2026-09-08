@@ -29,7 +29,7 @@ interface ArquivoOcr {
 interface OcrPreviewItemApi {
   key: string;
   nomeArquivo: string;
-  tipoDetectado: 'cnh' | 'rg' | null;
+  tipoDetectado: 'cnh' | 'rg' | 'ficha_associativa' | null;
   ocrNome: string | null;
   ocrCpf: string | null;
   confianca: 'alta' | 'baixa';
@@ -38,11 +38,12 @@ interface OcrPreviewItemApi {
   autoConfirmavel: boolean;
   associadoJaTemCnh: boolean;
   associadoJaTemRg: boolean;
+  associadoJaTemFicha: boolean;
 }
 
 interface OcrItemLocal extends OcrPreviewItemApi {
   associadoIdEscolhido: string | null;
-  tipoEscolhido: 'cnh' | 'rg' | null;
+  tipoEscolhido: 'cnh' | 'rg' | 'ficha_associativa' | null;
   incluir: boolean;
 }
 
@@ -368,7 +369,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
     );
   };
 
-  const handleEscolherTipoOcr = (key: string, tipo: 'cnh' | 'rg') => {
+  const handleEscolherTipoOcr = (key: string, tipo: 'cnh' | 'rg' | 'ficha_associativa') => {
     setOcrItens((prev) =>
       prev.map((it) => (it.key === key ? { ...it, tipoEscolhido: tipo, incluir: Boolean(it.associadoIdEscolhido) } : it)),
     );
@@ -506,11 +507,11 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
               {modo === 'ocr' && (
                 <div className="space-y-3">
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    Selecione de uma vez todos os documentos dos associados — fotos ou PDF, CNH e RG
-                    misturados, sem separar por tipo nem organizar em pastas. Aceita o PDF que costuma
-                    sair do app do Detran/Serpro, além de foto. O sistema identifica sozinho o tipo do
-                    documento, o nome e o CPF de cada um e sugere o associado; nada é anexado sem sua
-                    conferência na próxima tela.
+                    Selecione de uma vez todos os documentos dos associados — fotos ou PDF, CNH, RG e
+                    ficha associativa misturados, sem separar por tipo nem organizar em pastas. Aceita o
+                    PDF que costuma sair do app do Detran/Serpro, além de foto. O sistema identifica
+                    sozinho o tipo do documento, o nome e o CPF de cada um e sugere o associado; nada é
+                    anexado sem sua conferência na próxima tela.
                   </p>
                   <button
                     type="button"
@@ -518,7 +519,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
                     className="w-full py-8 border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center gap-2 text-slate-500 hover:border-[#148296] hover:text-[#148296] hover:bg-[#148296]/5 cursor-pointer transition-colors"
                   >
                     <Upload className="w-8 h-8" />
-                    <span className="text-xs font-bold">Selecionar todos os documentos (fotos e PDF, CNH e RG juntos)</span>
+                    <span className="text-xs font-bold">Selecionar todos os documentos (fotos e PDF, CNH, RG e ficha juntos)</span>
                   </button>
                   <input
                     ref={inputOcrRef}
@@ -650,7 +651,13 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
               <div className="space-y-2 max-h-72 overflow-y-auto">
                 {ocrItens.map((item) => {
                   const jaTemEsseTipo =
-                    item.tipoEscolhido === 'cnh' ? item.associadoJaTemCnh : item.tipoEscolhido === 'rg' ? item.associadoJaTemRg : false;
+                    item.tipoEscolhido === 'cnh'
+                      ? item.associadoJaTemCnh
+                      : item.tipoEscolhido === 'rg'
+                        ? item.associadoJaTemRg
+                        : item.tipoEscolhido === 'ficha_associativa'
+                          ? item.associadoJaTemFicha
+                          : false;
                   return (
                     <div
                       key={item.key}
@@ -677,7 +684,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
 
                       {jaTemEsseTipo && (
                         <p className="text-[10px] text-amber-700 font-semibold">
-                          Este associado já tem um {item.tipoEscolhido?.toUpperCase()} — o upload vai substituir.
+                          Este associado já tem {item.tipoEscolhido === 'ficha_associativa' ? 'uma ficha associativa' : `um ${item.tipoEscolhido?.toUpperCase()}`} — o upload vai substituir.
                         </p>
                       )}
 
@@ -690,7 +697,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
                           className="shrink-0"
                         />
                         <div className="flex rounded-lg border border-slate-200 overflow-hidden shrink-0">
-                          {(['cnh', 'rg'] as const).map((tipo) => (
+                          {(['cnh', 'rg', 'ficha_associativa'] as const).map((tipo) => (
                             <button
                               key={tipo}
                               type="button"
@@ -699,7 +706,7 @@ export const AnexarDocumentosModal: React.FC<AnexarDocumentosModalProps> = ({ is
                                 item.tipoEscolhido === tipo ? 'bg-[#148296] text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
                               }`}
                             >
-                              {tipo.toUpperCase()}
+                              {tipo === 'ficha_associativa' ? 'FICHA' : tipo.toUpperCase()}
                             </button>
                           ))}
                         </div>
