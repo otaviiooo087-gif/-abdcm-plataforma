@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Registro, RegistroOrgaoStatus, ORGAOS_BUREAU, ORGAO_BUREAU_LABEL, OrgaoBureau } from '../../domain/types.js';
-import { X, ShieldCheck, Loader2, PartyPopper } from 'lucide-react';
+import { X, Loader2, PartyPopper } from 'lucide-react';
+import { OrgaoLogoBadge } from '../shared/OrgaoLogoBadge.js';
 
 interface OrgaosBaixaModalProps {
   registro: Registro | null;
@@ -86,8 +87,8 @@ export const OrgaosBaixaModal: React.FC<OrgaosBaixaModalProps> = ({ registro, on
                     baixado ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'
                   }`}
                 >
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className={`w-4 h-4 ${baixado ? 'text-emerald-600' : 'text-slate-300'}`} />
+                  <div className="flex items-center gap-2.5">
+                    <OrgaoLogoBadge orgao={orgao} baixado={baixado} size="sm" showLabel={false} className="p-1 border-0 bg-transparent" />
                     <span className="text-xs font-bold text-slate-800">{ORGAO_BUREAU_LABEL[orgao]}</span>
                   </div>
                   {baixado ? (
