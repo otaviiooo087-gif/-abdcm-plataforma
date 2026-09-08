@@ -15,7 +15,8 @@ import {
   ArrowRight,
   ExternalLink,
 } from 'lucide-react';
-import { Lote, Registro, EventoNoticia } from '../../domain/types.js';
+import { Lote, Registro, EventoNoticia, ORGAOS_BUREAU, ORGAO_BUREAU_LABEL } from '../../domain/types.js';
+import { ORGAO_LOGO_URL } from '../../lib/orgaos/logos.js';
 import { AnuncioBanner } from './AnuncioBanner.js';
 
 interface HomeViewProps {
@@ -356,43 +357,18 @@ export const HomeView: React.FC<HomeViewProps> = ({
               </span>
             </div>
 
-            {/* Badges estilizados dos 4 Birôs de Crédito (Serasa Experian, Boa Vista, SPC Brasil, CENPROT) */}
-            <div className="grid grid-cols-4 gap-2.5 mt-5">
-              {/* Serasa Experian */}
-              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex flex-col items-center justify-center text-center h-16">
-                <div className="flex items-center gap-0.5 mb-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#E02479]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#7C3AED]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7]" />
-                  <span className="text-xs font-extrabold text-[#7C3AED] ml-0.5">serasa</span>
+            {/* Logos reais dos 5 birôs/cartórios com quem a ABDCM protocola */}
+            <div className="grid grid-cols-5 gap-2 mt-5">
+              {ORGAOS_BUREAU.map((orgao) => (
+                <div key={orgao} className="bg-slate-50 border border-slate-200/80 rounded-xl p-2 flex items-center justify-center h-16">
+                  <img
+                    src={ORGAO_LOGO_URL[orgao]}
+                    alt={ORGAO_BUREAU_LABEL[orgao]}
+                    title={ORGAO_BUREAU_LABEL[orgao]}
+                    className="max-h-9 w-auto object-contain"
+                  />
                 </div>
-                <span className="text-[9px] text-slate-500 font-medium">experian.</span>
-              </div>
-
-              {/* Boa Vista SCPC */}
-              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex flex-col items-center justify-center text-center h-16">
-                <span className="text-xs font-black text-[#0B4F8C]">BoaVista</span>
-                <span className="text-[9px] font-bold text-[#0B4F8C] bg-sky-100/80 px-1.5 py-0.2 rounded mt-0.5">
-                  SCPC
-                </span>
-              </div>
-
-              {/* SPC Brasil */}
-              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex flex-col items-center justify-center text-center h-16">
-                <div className="flex items-center gap-1">
-                  <div className="w-2.5 h-2.5 bg-amber-400 rotate-45 rounded-2xs" />
-                  <span className="text-xs font-extrabold text-slate-800">SPC</span>
-                </div>
-                <span className="text-[9px] font-semibold text-slate-600">BRASIL</span>
-              </div>
-
-              {/* CENPROT */}
-              <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2.5 flex flex-col items-center justify-center text-center h-16">
-                <div className="w-4 h-4 rounded-sm bg-gradient-to-tr from-[#1E3A8A] to-[#3B82F6] flex items-center justify-center text-[9px] text-white font-bold mb-0.5">
-                  C
-                </div>
-                <span className="text-[10px] font-black text-slate-800 tracking-wider">CENPROT</span>
-              </div>
+              ))}
             </div>
           </div>
 

@@ -6,11 +6,11 @@ import {
   RegistroOrgaoStatus,
   NadaConstaEmissao,
   ORGAOS_BUREAU,
-  ORGAO_BUREAU_LABEL,
   OrgaoBureau,
 } from '../../domain/types.js';
 import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
-import { X, Calendar, FileText, ExternalLink, ShieldCheck, Loader2, BadgeCheck } from 'lucide-react';
+import { X, Calendar, FileText, ExternalLink, BadgeCheck } from 'lucide-react';
+import { OrgaoLogoBadge } from '../shared/OrgaoLogoBadge.js';
 
 interface ListaEnviada {
   id: string;
@@ -129,32 +129,7 @@ export const NomesDaListaModal: React.FC<NomesDaListaModalProps> = ({
                 {ORGAOS_BUREAU.map((orgao) => {
                   const baixado = orgaoBaixadoParaTodos(orgao);
                   const aguardando = !baixado && orgao === proximoOrgaoPendente;
-                  return (
-                    <div key={orgao} className="flex flex-col items-center gap-1.5">
-                      <motion.div
-                        animate={aguardando ? { scale: [1, 1.08, 1] } : {}}
-                        transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
-                        className={`w-11 h-11 rounded-full flex items-center justify-center border-2 transition-colors duration-700 ${
-                          baixado
-                            ? 'bg-emerald-500 border-emerald-500 text-white'
-                            : aguardando
-                            ? 'bg-amber-50 border-amber-300 text-amber-500'
-                            : 'bg-slate-100 border-slate-200 text-slate-300'
-                        }`}
-                      >
-                        <ShieldCheck className="w-5 h-5" />
-                      </motion.div>
-                      <span className={`text-[9px] font-bold text-center leading-tight ${baixado ? 'text-emerald-700' : 'text-slate-400'}`}>
-                        {ORGAO_BUREAU_LABEL[orgao]}
-                      </span>
-                      {aguardando && (
-                        <span className="text-[8px] text-amber-600 font-semibold flex items-center gap-0.5">
-                          <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                          aguardando
-                        </span>
-                      )}
-                    </div>
-                  );
+                  return <OrgaoLogoBadge key={orgao} orgao={orgao} baixado={baixado} aguardando={aguardando} size="md" />;
                 })}
               </div>
             </div>

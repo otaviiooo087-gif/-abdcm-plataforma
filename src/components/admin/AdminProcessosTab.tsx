@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Lote, Registro, RegistroOrgaoStatus, ORGAOS_BUREAU, ORGAO_BUREAU_LABEL } from '../../domain/types.js';
+import { Lote, Registro, RegistroOrgaoStatus, ORGAOS_BUREAU } from '../../domain/types.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { UserSession } from '../../server/mockData.js';
 import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
 import { OrgaosBaixaModal } from './OrgaosBaixaModal.js';
 import { EditarLoteModal } from './EditarLoteModal.js';
+import { OrgaoLogoBadge } from '../shared/OrgaoLogoBadge.js';
 import {
   Layers,
   Search,
@@ -521,23 +522,9 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
         <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5">
           <h3 className="text-sm font-bold text-slate-900 mb-3">Andamento do Processo — Órgãos</h3>
           <div className="grid grid-cols-5 gap-2">
-            {ORGAOS_BUREAU.map((orgao) => {
-              const baixado = orgaoBaixadoParaTodosNoLote(detalhesLoteId, orgao);
-              return (
-                <div key={orgao} className="flex flex-col items-center gap-1.5">
-                  <div
-                    className={`w-11 h-11 rounded-full flex items-center justify-center border-2 ${
-                      baixado ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-300'
-                    }`}
-                  >
-                    <ShieldCheck className="w-5 h-5" />
-                  </div>
-                  <span className={`text-[9px] font-bold text-center leading-tight ${baixado ? 'text-emerald-700' : 'text-slate-400'}`}>
-                    {ORGAO_BUREAU_LABEL[orgao]}
-                  </span>
-                </div>
-              );
-            })}
+            {ORGAOS_BUREAU.map((orgao) => (
+              <OrgaoLogoBadge key={orgao} orgao={orgao} baixado={orgaoBaixadoParaTodosNoLote(detalhesLoteId, orgao)} size="md" />
+            ))}
           </div>
         </div>
 
@@ -870,21 +857,16 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
 
                   {/* Órgãos contemplados — cinza em processo, colorido quando baixado pra todos */}
                   <div className="mt-2.5 flex items-center justify-between gap-1">
-                    {ORGAOS_BUREAU.map((orgao) => {
-                      const baixado = orgaoBaixadoParaTodosNoLote(lote.id, orgao);
-                      return (
-                        <div key={orgao} className="flex flex-col items-center gap-0.5" title={ORGAO_BUREAU_LABEL[orgao]}>
-                          <div
-                            className={`w-6 h-6 rounded-full flex items-center justify-center border ${
-                              baixado ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-300'
-                            }`}
-                          >
-                            <ShieldCheck className="w-3 h-3" />
-                          </div>
-                          <span className="text-[7px] text-slate-400 font-bold leading-none">{ORGAO_BUREAU_LABEL[orgao].split(' ')[0]}</span>
-                        </div>
-                      );
-                    })}
+                    {ORGAOS_BUREAU.map((orgao) => (
+                      <OrgaoLogoBadge
+                        key={orgao}
+                        orgao={orgao}
+                        baixado={orgaoBaixadoParaTodosNoLote(lote.id, orgao)}
+                        size="sm"
+                        showLabel={false}
+                        className="p-1 border-0 bg-transparent"
+                      />
+                    ))}
                   </div>
                 </div>
 

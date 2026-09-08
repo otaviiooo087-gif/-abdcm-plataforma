@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Registro, Lote, RegistroOrgaoStatus, NadaConstaEmissao, ORGAOS_BUREAU, ORGAO_BUREAU_LABEL } from '../../domain/types.js';
+import { Registro, Lote, RegistroOrgaoStatus, NadaConstaEmissao, ORGAOS_BUREAU } from '../../domain/types.js';
 import { StatusDocumentos } from '../../lib/documentos/index.js';
 import { Download, Search, Calendar, Eye, BadgeCheck } from 'lucide-react';
 import { NomesDaListaModal } from './NomesDaListaModal.js';
+import { OrgaoLogoBadge } from '../shared/OrgaoLogoBadge.js';
 
 interface ListaEnviada {
   id: string;
@@ -130,17 +131,6 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
       </span>
     );
   };
-
-  const getBureauPill = (baixado: boolean) =>
-    baixado ? (
-      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
-        baixado
-      </span>
-    ) : (
-      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200 uppercase">
-        pendente
-      </span>
-    );
 
   const handleAbrirDocumento = async (associadoId: string, tipo: keyof StatusDocumentos) => {
     const chave = `${associadoId}:${tipo}`;
@@ -281,10 +271,14 @@ export const MinhasListasView: React.FC<MinhasListasViewProps> = ({ registros, l
 
                 <div className="grid grid-cols-5 gap-1 text-center pt-1">
                   {ORGAOS_BUREAU.map((orgao) => (
-                    <div key={orgao} className="flex flex-col items-center gap-1">
-                      {getBureauPill(orgaoBaixadoParaTodos(orgao))}
-                      <span className="text-[8px] text-slate-400 leading-tight">{ORGAO_BUREAU_LABEL[orgao]}</span>
-                    </div>
+                    <OrgaoLogoBadge
+                      key={orgao}
+                      orgao={orgao}
+                      baixado={orgaoBaixadoParaTodos(orgao)}
+                      size="sm"
+                      showLabel={false}
+                      className="p-1 border-0 bg-transparent"
+                    />
                   ))}
                 </div>
 
