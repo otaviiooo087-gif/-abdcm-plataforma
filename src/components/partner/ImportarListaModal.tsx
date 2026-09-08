@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { X, UploadCloud, Download, CheckCircle2, AlertCircle, Upload, Loader2, XCircle, Sparkles, RefreshCw } from 'lucide-react';
+import { stageArquivo } from '../../lib/documentos/index.js';
 
 interface LinhaImportacao {
   nome: string;
@@ -49,26 +50,6 @@ function formatarCpfCnpj(digits: string): string {
     return digits.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
   }
   return digits;
-}
-
-async function stageArquivo(file: File): Promise<{ key: string; mimeType: string; nomeArquivo: string }> {
-  const mimeType = file.type || 'application/octet-stream';
-  const presignRes = await fetch('/api/documentos/staging/presign', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mimeType }),
-  });
-  const presignData = await presignRes.json();
-  if (!presignRes.ok) throw new Error(presignData.error || 'Falha ao autorizar upload');
-
-  const uploadRes = await fetch(presignData.uploadUrl, {
-    method: 'PUT',
-    headers: presignData.headers || {},
-    body: file,
-  });
-  if (!uploadRes.ok) throw new Error('Falha ao enviar o arquivo pro armazenamento');
-
-  return { key: presignData.key, mimeType, nomeArquivo: file.name };
 }
 
 export const ImportarListaModal: React.FC<ImportarListaModalProps> = ({
