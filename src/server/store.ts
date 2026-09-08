@@ -32,6 +32,7 @@ import type {
   NotificacaoEnviada,
   AutomacaoConfig,
   TipoNotificacao,
+  EventoNoticia,
 } from '../domain/types.js';
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
 import { maskDocument } from '../lib/masking/documentMasker.js';
@@ -59,6 +60,7 @@ type ProcessEventRow = typeof schema.processEvents.$inferSelect;
 type AuditLogRow = typeof schema.auditLog.$inferSelect;
 type ContestacaoRow = typeof schema.contestacoes.$inferSelect;
 type ServicoRow = typeof schema.servicos.$inferSelect;
+type EventoNoticiaRow = typeof schema.eventosNoticias.$inferSelect;
 type ContratoRow = typeof schema.contratos.$inferSelect;
 type PixCobrancaRow = typeof schema.pixCobrancas.$inferSelect;
 type NotificacaoEnviadaRow = typeof schema.notificacoesEnviadas.$inferSelect;
@@ -217,6 +219,23 @@ function servicoDeLinha(s: ServicoRow): Servico {
     foto_url: s.fotoUrl,
     link_redirecionamento: s.linkRedirecionamento,
     created_at: s.createdAt,
+  };
+}
+
+function eventoNoticiaDeLinha(e: EventoNoticiaRow): EventoNoticia {
+  return {
+    id: e.id,
+    tenant_id: e.tenantId,
+    tipo: e.tipo as EventoNoticia['tipo'],
+    titulo: e.titulo,
+    descricao: e.descricao,
+    categoria: e.categoria,
+    imagem_url: e.imagemUrl,
+    link_externo: e.linkExterno,
+    data_evento: e.dataEvento,
+    ativo: e.ativo,
+    criado_por_user_id: e.criadoPorUserId,
+    created_at: e.createdAt,
   };
 }
 
@@ -1637,6 +1656,72 @@ async function deleteServico(
 }
 
 // ---------------------------------------------------------------------
+// Eventos e Notícias — CMS simples controlado pelo admin
+// ---------------------------------------------------------------------
+
+async function getEventosNoticias(): Promise<EventoNoticia[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.eventosNoticias)
+    .where(eq(schema.eventosNoticias.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.eventosNoticias.createdAt));
+  return linhas.map(eventoNoticiaDeLinha);
+}
+
+async function createEventoNoticia(data: {
+  tipo: string;
+  titulo: string;
+  descricao: string;
+  categoria: string;
+  imagemUrl?: string;
+  linkExterno?: string;
+  dataEvento?: string;
+  atorUserId: string;
+}): Promise<EventoNoticia> {
+  if (data.tipo !== 'evento' && data.tipo !== 'noticia') throw new Error('Tipo inválido (use "evento" ou "noticia").');
+  if (!data.titulo?.trim()) throw new Error('Título é obrigatório.');
+  if (!data.descricao?.trim()) throw new Error('Descrição é obrigatória.');
+  if (!data.categoria?.trim()) throw new Error('Categoria é obrigatória.');
+
+  const novo = {
+    id: novoId('evt'),
+    tenantId: ABDCM_TENANT_ID,
+    tipo: data.tipo,
+    titulo: data.titulo.trim(),
+    descricao: data.descricao.trim(),
+    categoria: data.categoria.trim(),
+    imagemUrl: data.imagemUrl?.trim() || null,
+    linkExterno: data.linkExterno?.trim() || null,
+    dataEvento: data.dataEvento || null,
+    ativo: true,
+    criadoPorUserId: data.atorUserId,
+    createdAt: new Date().toISOString(),
+  };
+  await db().insert(schema.eventosNoticias).values(novo);
+  return eventoNoticiaDeLinha(novo as EventoNoticiaRow);
+}
+
+async function updateEventoNoticia(id: string, data: Partial<{ ativo: boolean }>): Promise<EventoNoticia> {
+  const [atual] = await db()
+    .select()
+    .from(schema.eventosNoticias)
+    .where(and(eq(schema.eventosNoticias.id, id), eq(schema.eventosNoticias.tenantId, ABDCM_TENANT_ID)));
+  if (!atual) throw new Error('Registro não encontrado.');
+
+  const patch: Partial<EventoNoticiaRow> = {};
+  if (data.ativo !== undefined) patch.ativo = data.ativo;
+
+  await db().update(schema.eventosNoticias).set(patch).where(eq(schema.eventosNoticias.id, id));
+  return eventoNoticiaDeLinha({ ...atual, ...patch });
+}
+
+async function deleteEventoNoticia(id: string): Promise<void> {
+  await db()
+    .delete(schema.eventosNoticias)
+    .where(and(eq(schema.eventosNoticias.id, id), eq(schema.eventosNoticias.tenantId, ABDCM_TENANT_ID)));
+}
+
+// ---------------------------------------------------------------------
 // Contratos e Documentos Complementares (o admin anexa quantos quiser —
 // ficha associativa modelo, contrato de intermediação etc; associados e
 // parceiros só leem/baixam).
@@ -2301,6 +2386,10 @@ export const serverStore = {
   getContratos,
   addContrato,
   deleteContrato,
+  getEventosNoticias,
+  createEventoNoticia,
+  updateEventoNoticia,
+  deleteEventoNoticia,
   confirmarPagamentoPixWebhook,
   getPixCobrancaPorSubmissao,
   getAutomacoesConfig,

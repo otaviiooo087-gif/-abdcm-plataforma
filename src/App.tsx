@@ -21,7 +21,15 @@ export default function App() {
   const [currentSurface, setCurrentSurface] = useState<'parceiro' | 'admin' | 'publico'>('parceiro');
   const [parceiroTab, setParceiroTab] = useState<string>('home');
   const [adminTab, setAdminTab] = useState<
-    'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle'
+    | 'dashboard'
+    | 'processos'
+    | 'associados'
+    | 'financeiro'
+    | 'servicos'
+    | 'eventos'
+    | 'automacoes'
+    | 'config'
+    | 'controle'
   >('dashboard');
   const [session, setSession] = useState<UserSession | null>(null);
   const [demoModeChosen, setDemoModeChosen] = useState<boolean>(

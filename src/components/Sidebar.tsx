@@ -25,9 +25,27 @@ import {
 interface SidebarProps {
   currentSurface: 'parceiro' | 'admin' | 'publico';
   onSelectSurface: (surface: 'parceiro' | 'admin' | 'publico') => void;
-  adminTab: 'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
+  adminTab:
+    | 'dashboard'
+    | 'processos'
+    | 'associados'
+    | 'financeiro'
+    | 'servicos'
+    | 'eventos'
+    | 'automacoes'
+    | 'config'
+    | 'controle';
   onSelectAdminTab: (
-    tab: 'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle',
+    tab:
+      | 'dashboard'
+      | 'processos'
+      | 'associados'
+      | 'financeiro'
+      | 'servicos'
+      | 'eventos'
+      | 'automacoes'
+      | 'config'
+      | 'controle',
   ) => void;
   parceiroTab?: string;
   onSelectParceiroTab?: (tab: string) => void;
@@ -284,6 +302,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <ShoppingBag className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
                 <span>Serviços</span>
+              </button>
+
+              <button
+                onClick={() => onSelectAdminTab('eventos')}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
+                  adminTab === 'eventos'
+                    ? 'bg-[#0c4f5d] font-bold text-white shadow-2xs'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Calendar className="w-4 h-4 opacity-90 shrink-0 text-emerald-300" />
+                <span>Eventos e Notícias</span>
               </button>
 
               <button

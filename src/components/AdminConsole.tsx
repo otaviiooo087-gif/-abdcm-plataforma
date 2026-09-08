@@ -9,10 +9,20 @@ import { AdminFinanceiroTab } from './admin/AdminFinanceiroTab.js';
 import { AdminConfiguracoesTab } from './admin/AdminConfiguracoesTab.js';
 import { AdminDashboardTab } from './admin/AdminDashboardTab.js';
 import { AdminServicosTab } from './admin/AdminServicosTab.js';
+import { AdminEventosTab } from './admin/AdminEventosTab.js';
 import { AdminAutomacoesTab } from './admin/AdminAutomacoesTab.js';
 import { ArrowRightLeft, Search, RefreshCw, Download, Plus, X, Check } from 'lucide-react';
 
-type AdminTab = 'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle';
+type AdminTab =
+  | 'dashboard'
+  | 'processos'
+  | 'associados'
+  | 'financeiro'
+  | 'servicos'
+  | 'eventos'
+  | 'automacoes'
+  | 'config'
+  | 'controle';
 
 interface AdminConsoleProps {
   activeTab: AdminTab;
@@ -273,6 +283,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ABA: SERVIÇOS                                        */}
       {/* ==================================================== */}
       {activeTab === 'servicos' && <AdminServicosTab />}
+
+      {activeTab === 'eventos' && <AdminEventosTab />}
 
       {/* ==================================================== */}
       {/* ABA: AUTOMAÇÕES                                      */}

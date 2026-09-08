@@ -215,6 +215,21 @@ export const usuarios = pgTable('usuarios', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
+export const eventosNoticias = pgTable('eventos_noticias', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  tipo: text('tipo').notNull(),
+  titulo: text('titulo').notNull(),
+  descricao: text('descricao').notNull(),
+  categoria: text('categoria').notNull(),
+  imagemUrl: text('imagem_url'),
+  linkExterno: text('link_externo'),
+  dataEvento: timestamp('data_evento', { withTimezone: true, mode: 'string' }),
+  ativo: boolean('ativo').notNull().default(true),
+  criadoPorUserId: text('criado_por_user_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
 export const automacoesConfig = pgTable('automacoes_config', {
   chave: text('chave').primaryKey(),
   tenantId: text('tenant_id').notNull(),

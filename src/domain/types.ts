@@ -266,3 +266,20 @@ export interface AutomacaoConfig {
   config: Record<string, unknown>;
   atualizado_em: string;
 }
+
+export type TipoEventoNoticia = 'evento' | 'noticia';
+
+export interface EventoNoticia {
+  id: string;
+  tenant_id: string;
+  tipo: TipoEventoNoticia;
+  titulo: string;
+  descricao: string;
+  categoria: string; // ex.: "Live", "Novo Serviço", "Comunicado" — texto livre do admin
+  imagem_url?: string | null;
+  link_externo?: string | null; // ex.: link do Zoom, WhatsApp, página do serviço
+  data_evento?: string | null; // só relevante pra tipo 'evento'
+  ativo: boolean;
+  criado_por_user_id: string;
+  created_at: string;
+}

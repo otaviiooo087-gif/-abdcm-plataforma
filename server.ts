@@ -674,6 +674,67 @@ async function startServer() {
     }
   });
 
+  // 6.2.1 Eventos e Notícias — CMS controlado pelo admin (live, novo
+  // serviço, comunicados etc), exibido pro parceiro na aba Eventos.
+  app.get('/api/eventos-noticias', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getEventosNoticias());
+  });
+
+  app.post('/api/eventos-noticias', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM publica eventos e notícias.' });
+        return;
+      }
+      const { tipo, titulo, descricao, categoria, imagemUrl, linkExterno, dataEvento } = req.body;
+      const novo = await serverStore.createEventoNoticia({
+        tipo,
+        titulo,
+        descricao,
+        categoria,
+        imagemUrl,
+        linkExterno,
+        dataEvento,
+        atorUserId: session.id,
+      });
+      res.status(201).json(novo);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao publicar';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.patch('/api/eventos-noticias/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM edita eventos e notícias.' });
+        return;
+      }
+      const atualizado = await serverStore.updateEventoNoticia(req.params.id, req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao atualizar';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/eventos-noticias/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM remove eventos e notícias.' });
+        return;
+      }
+      await serverStore.deleteEventoNoticia(req.params.id);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao remover';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 6.3 Contratos e Documentos Complementares (admin anexa quantos quiser —
   // ficha associativa modelo, contrato de intermediação etc; parceiro só lê)
   app.get('/api/contratos', async (_req: Request, res: Response) => {
