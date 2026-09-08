@@ -40,7 +40,7 @@ export const associados = pgTable('associados', {
   cpfCnpjRaw: text('cpf_cnpj_raw').notNull(),
   cpfCnpj: text('cpf_cnpj').notNull(),
   tipoDocumento: text('tipo_documento').notNull(),
-  telefoneWhatsapp: text('telefone_whatsapp').notNull(),
+  telefoneWhatsapp: text('telefone_whatsapp'),
   email: text('email'),
   statusFiliacao: text('status_filiacao').notNull(),
   filiadoEm: timestamp('filiado_em', { withTimezone: true, mode: 'string' }),

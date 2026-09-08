@@ -213,7 +213,8 @@ async function startServer() {
     }
   });
 
-  // 4.2 Importação em Massa de Registros (Planilha Excel/CSV)
+  // 4.2 Importação em Massa de Registros (Planilha Excel/CSV), com anexo
+  // opcional de documentos (CNH/RG/ficha associativa) já casados por CPF.
   app.post('/api/registros/import', async (req: Request, res: Response) => {
     try {
       const { itens } = req.body;
@@ -221,13 +222,41 @@ async function startServer() {
         res.status(400).json({ error: 'Nenhum item válido para importação.' });
         return;
       }
-      const importados = [];
-      for (const item of itens as Array<{ nome: string; cpf_cnpj: string }>) {
-        importados.push(await serverStore.addRegistro({ nome: item.nome, cpf_cnpj: item.cpf_cnpj, origem: 'planilha' }));
-      }
+      const session = serverStore.getSession();
+      const importados = await serverStore.importarRegistros(itens, session.id);
       res.status(201).json({ success: true, count: importados.length, importados });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro na importação';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 4.2.1 Preview da planilha (lê o arquivo já enviado pro storage, nada
+  // é gravado no banco — I3).
+  app.post('/api/registros/import/preview', async (req: Request, res: Response) => {
+    try {
+      const { key, mimeType, nomeArquivo } = req.body;
+      const resultado = await serverStore.parseArquivoImportacao(key, mimeType, nomeArquivo);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao ler a planilha';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 4.2.2 Leitura automática (OCR) dos documentos anexados junto com a
+  // importação — casa cada arquivo com uma linha da planilha por CPF.
+  app.post('/api/registros/import/ocr-preview', async (req: Request, res: Response) => {
+    try {
+      const { itens, linhas } = req.body;
+      if (!Array.isArray(itens) || !Array.isArray(linhas)) {
+        res.status(400).json({ error: 'itens e linhas devem ser listas.' });
+        return;
+      }
+      const resultado = await serverStore.lerDocumentosOcrParaImportacao(itens, linhas);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao ler os documentos';
       res.status(400).json({ error: msg });
     }
   });

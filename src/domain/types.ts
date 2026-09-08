@@ -125,7 +125,10 @@ export interface Associado {
   cpf_cnpj_raw: string;
   cpf_cnpj: string;
   tipo_documento: DocumentType;
-  telefone_whatsapp: string;
+  /** Opcional — nem todo associado tem telefone coletado ainda (ex.: importado
+   * por planilha, sem ficha assinada). Sem telefone, o bot de WhatsApp (I7)
+   * simplesmente não funciona pra essa pessoa até alguém completar o cadastro. */
+  telefone_whatsapp: string | null;
   email?: string | null;
   status_filiacao: StatusFiliacao;
   filiado_em?: string | null;

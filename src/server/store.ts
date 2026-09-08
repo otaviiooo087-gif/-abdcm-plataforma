@@ -9,6 +9,7 @@
  * I9 (tenant_id em toda tabela).
  */
 
+import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
@@ -777,10 +778,28 @@ async function addRegistro(data: {
 
   // I6: cpf_cnpj sempre mascarado por padrão — o valor completo só existe em
   // cpf_cnpj_raw, revelado sob clique via revealDocument() com auditoria.
-  // Cria um Associado de verdade (não um id fabricado) sempre que houver
-  // telefone — é o que torna o bot/automação de WhatsApp possível (I7).
-  const associadoId = data.telefone_whatsapp ? novoId('assoc') : `assoc-${id}`;
-  if (data.telefone_whatsapp) {
+  // Associado é entidade de primeira classe, independente do registro/lote —
+  // reaproveita o mesmo associado se o CPF já existir (evita fragmentar
+  // documentos/consentimento em ids diferentes pra mesma pessoa) e cria um
+  // novo, sempre real (nunca um id fabricado), caso contrário. Telefone é
+  // opcional: sem ele o bot de WhatsApp (I7) simplesmente não funciona pra
+  // essa pessoa até alguém completar o cadastro depois.
+  const [associadoExistente] = await db()
+    .select()
+    .from(schema.associados)
+    .where(and(eq(schema.associados.tenantId, ABDCM_TENANT_ID), eq(schema.associados.cpfCnpjRaw, limpo)));
+
+  let associadoId: string;
+  if (associadoExistente) {
+    associadoId = associadoExistente.id;
+    if (data.telefone_whatsapp && !associadoExistente.telefoneWhatsapp) {
+      await db()
+        .update(schema.associados)
+        .set({ telefoneWhatsapp: data.telefone_whatsapp.trim() })
+        .where(eq(schema.associados.id, associadoId));
+    }
+  } else {
+    associadoId = novoId('assoc');
     await db().insert(schema.associados).values({
       id: associadoId,
       tenantId: ABDCM_TENANT_ID,
@@ -789,7 +808,7 @@ async function addRegistro(data: {
       cpfCnpjRaw: limpo,
       cpfCnpj: maskDocument(limpo),
       tipoDocumento: tipo,
-      telefoneWhatsapp: data.telefone_whatsapp.trim(),
+      telefoneWhatsapp: data.telefone_whatsapp?.trim() || null,
       statusFiliacao: 'pre_cadastro',
       createdAt: now,
     });
@@ -817,6 +836,250 @@ async function addRegistro(data: {
 
   await db().insert(schema.registros).values(novo);
   return registroDeLinha(novo as RegistroRow);
+}
+
+// ---------------------------------------------------------------------
+// Importação de planilha (Nome + CPF/CNPJ), com anexo opcional de
+// documentos (CNH/RG/ficha associativa) casados por CPF via OCR.
+// ---------------------------------------------------------------------
+
+export interface LinhaImportacao {
+  nome: string;
+  cpfCnpj: string;
+  status: 'ok' | 'error';
+  erro?: string;
+}
+
+/** Parser de linha CSV simples respeitando aspas — suficiente pro modelo de
+ * Nome + CPF/CNPJ que a própria plataforma gera pro parceiro baixar. */
+function parseLinhaCsv(linha: string): string[] {
+  const campos: string[] = [];
+  let atual = '';
+  let dentroDeAspas = false;
+  for (const c of linha) {
+    if (c === '"') {
+      dentroDeAspas = !dentroDeAspas;
+    } else if (c === ',' && !dentroDeAspas) {
+      campos.push(atual);
+      atual = '';
+    } else {
+      atual += c;
+    }
+  }
+  campos.push(atual);
+  return campos;
+}
+
+/** Baixa a planilha já enviada pro storage (presignStagingUpload) e lê as
+ * linhas — nunca escreve nada no banco (I3: preview não escreve nada).
+ * Linha 1 é sempre cabeçalho, ignorada. CPF/CNPJ inválido ou duplicado
+ * dentro do próprio arquivo vira status 'error', mas a linha aparece do
+ * mesmo jeito pra conferência — planilha malformada não quebra a
+ * importação inteira, só as linhas ruins ficam marcadas. */
+async function parseArquivoImportacao(
+  key: string,
+  mimeType: string,
+  nomeArquivo: string,
+): Promise<{ linhas: LinhaImportacao[]; ignoradas: number }> {
+  const url = resolverUrlAbsoluta(await getStorageProvider().criarUrlDownload(key, URL_STORAGE_EXPIRA_SEGUNDOS));
+  const resposta = await fetch(url);
+  if (!resposta.ok) throw new Error(`Falha ao baixar a planilha (status ${resposta.status}).`);
+  const bytes = await resposta.arrayBuffer();
+
+  const linhasBrutas: string[][] = [];
+  const ehCsv = mimeType === 'text/csv' || nomeArquivo.toLowerCase().endsWith('.csv');
+
+  if (ehCsv) {
+    const texto = Buffer.from(bytes).toString('utf8');
+    for (const linha of texto.split(/\r?\n/)) {
+      if (linha.trim()) linhasBrutas.push(parseLinhaCsv(linha));
+    }
+  } else {
+    try {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(Buffer.from(bytes));
+      const planilha = workbook.worksheets[0];
+      if (!planilha) throw new Error('sem abas');
+      planilha.eachRow((row) => {
+        const valores = (row.values as unknown[]).slice(1);
+        linhasBrutas.push(valores.map((v) => (v == null ? '' : String(v).trim())));
+      });
+    } catch {
+      throw new Error('Não conseguimos ler esse arquivo. Envie em .xlsx ou .csv.');
+    }
+  }
+
+  if (linhasBrutas.length === 0) return { linhas: [], ignoradas: 0 };
+
+  // Linha 1 é cabeçalho, sempre ignorada (formato já documentado na tela).
+  const dados = linhasBrutas.slice(1);
+  let ignoradas = 0;
+  const vistos = new Set<string>();
+  const linhas: LinhaImportacao[] = [];
+
+  for (const cols of dados) {
+    const nome = (cols[0] || '').trim();
+    const cpfCnpjBruto = (cols[1] || '').trim();
+    if (!nome && !cpfCnpjBruto) {
+      ignoradas++;
+      continue;
+    }
+    const cpfCnpj = cpfCnpjBruto.replace(/\D/g, '');
+    if (!nome) {
+      linhas.push({ nome: '(sem nome)', cpfCnpj, status: 'error', erro: 'Nome vazio.' });
+      continue;
+    }
+    if (cpfCnpj.length !== 11 && cpfCnpj.length !== 14) {
+      linhas.push({ nome, cpfCnpj, status: 'error', erro: 'CPF/CNPJ inválido.' });
+      continue;
+    }
+    if (vistos.has(cpfCnpj)) {
+      linhas.push({ nome, cpfCnpj, status: 'error', erro: 'CPF/CNPJ duplicado nesta planilha.' });
+      continue;
+    }
+    vistos.add(cpfCnpj);
+    linhas.push({ nome, cpfCnpj, status: 'ok' });
+  }
+
+  return { linhas, ignoradas };
+}
+
+export interface ImportOcrPreviewItem {
+  key: string;
+  nomeArquivo: string;
+  tipoDetectado: 'cnh' | 'rg' | 'ficha_associativa' | null;
+  ocrNome: string | null;
+  ocrCpf: string | null;
+  confianca: 'alta' | 'baixa';
+  /** CPF/CNPJ (normalizado) de uma linha da planilha sendo importada que
+   * bateu com o CPF lido — null quando não bateu com nenhuma linha. */
+  linhaCpfCnpjSugerida: string | null;
+  autoConfirmavel: boolean;
+}
+
+/** Igual a lerDocumentosOcr, mas casa o CPF lido contra as linhas da
+ * planilha sendo importada agora — essas pessoas ainda não são associados
+ * no banco, então a conferência é contra o lote em memória, não contra a
+ * base (I3: nada é gravado aqui). */
+async function lerDocumentosOcrParaImportacao(
+  itens: { key: string; mimeType: string; nomeArquivo: string }[],
+  linhas: { nome: string; cpfCnpj: string }[],
+): Promise<ImportOcrPreviewItem[]> {
+  const porCpf = new Map(linhas.map((l) => [l.cpfCnpj, l]));
+  const ocr = getOcrProvider();
+
+  return Promise.all(
+    itens.map(async (item) => {
+      const documentoUrl = resolverUrlAbsoluta(await getStorageProvider().criarUrlDownload(item.key, URL_STORAGE_EXPIRA_SEGUNDOS));
+      const lido = await ocr.lerDocumento({ documentoUrl, mimeType: item.mimeType });
+      const linha = lido.cpf ? porCpf.get(lido.cpf) : undefined;
+
+      return {
+        key: item.key,
+        nomeArquivo: item.nomeArquivo,
+        tipoDetectado: lido.tipoDocumento,
+        ocrNome: lido.nome,
+        ocrCpf: lido.cpf,
+        confianca: lido.confianca,
+        linhaCpfCnpjSugerida: linha?.cpfCnpj ?? null,
+        autoConfirmavel: lido.confianca === 'alta' && Boolean(linha) && lido.tipoDocumento !== null,
+      };
+    }),
+  );
+}
+
+/** Ficha associativa anexada em massa e confirmada pelo parceiro conta como
+ * filiação assinada (I5): grava consentimento com data, IP de quem enviou
+ * e hash do arquivo, e audita a transição de status. */
+async function marcarFichaAssinadaPorImportacao(associadoId: string, fichaKey: string, atorUserId: string): Promise<void> {
+  const [atual] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
+  if (!atual) return;
+
+  let hash: string | null = null;
+  try {
+    const url = resolverUrlAbsoluta(await getStorageProvider().criarUrlDownload(fichaKey, URL_STORAGE_EXPIRA_SEGUNDOS));
+    const resposta = await fetch(url);
+    if (resposta.ok) {
+      const bytes = await resposta.arrayBuffer();
+      hash = createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+    }
+  } catch (err) {
+    console.error(`[marcarFichaAssinadaPorImportacao] falha ao calcular hash da ficha de ${associadoId}:`, err);
+  }
+
+  const now = new Date().toISOString();
+  await db()
+    .update(schema.associados)
+    .set({
+      statusFiliacao: 'ficha_assinada',
+      consentimentoEm: now,
+      consentimentoIp: '127.0.0.1',
+      consentimentoHash: hash,
+      fichaDocumentoId: fichaKey,
+    })
+    .where(eq(schema.associados.id, associadoId));
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: atual.tenantId,
+    atorUserId,
+    acao: 'ASSOCIADO_FICHA_ASSINADA_IMPORTACAO',
+    entidadeTipo: 'associados',
+    entidadeId: associadoId,
+    antes: { statusFiliacao: atual.statusFiliacao },
+    depois: { statusFiliacao: 'ficha_assinada', consentimentoHash: hash },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Partner-Portal',
+    ocorridoEm: now,
+  });
+}
+
+export interface DocumentoParaImportar {
+  tipo: 'cnh' | 'rg' | 'ficha_associativa';
+  key: string;
+  mimeType: string;
+  nomeArquivo: string;
+}
+
+export interface ItemParaImportar {
+  nome: string;
+  cpf_cnpj: string;
+  documentos?: DocumentoParaImportar[];
+}
+
+/** Importa as linhas confirmadas pelo parceiro, criando (ou reaproveitando,
+ * por CPF) o associado de cada uma e anexando os documentos já casados —
+ * cada anexo é best-effort: uma falha isolada não derruba a importação
+ * inteira, só fica de fora do relatório de sucesso. */
+async function importarRegistros(itens: ItemParaImportar[], atorUserId: string): Promise<Registro[]> {
+  const importados: Registro[] = [];
+  for (const item of itens) {
+    const registro = await addRegistro({ nome: item.nome, cpf_cnpj: item.cpf_cnpj, origem: 'planilha' });
+    importados.push(registro);
+
+    if (!item.documentos || item.documentos.length === 0) continue;
+
+    for (const doc of item.documentos) {
+      try {
+        await confirmarDocumentoUpload({
+          associadoId: registro.associado_id,
+          tipo: doc.tipo,
+          key: doc.key,
+          mimeType: doc.mimeType,
+          nomeArquivo: doc.nomeArquivo,
+          atorUserId,
+        });
+      } catch (err) {
+        console.error(`[importarRegistros] falha ao anexar ${doc.tipo} do registro ${registro.id}:`, err);
+      }
+    }
+
+    const ficha = item.documentos.find((d) => d.tipo === 'ficha_associativa');
+    if (ficha) {
+      await marcarFichaAssinadaPorImportacao(registro.associado_id, ficha.key, atorUserId);
+    }
+  }
+  return importados;
 }
 
 /** Exclui registro ainda pendente e não bloqueado. */
@@ -1487,7 +1750,7 @@ export interface OcrPreviewItem {
   nomeArquivo: string;
   /** Tipo identificado na própria imagem — null quando a IA não conseguiu
    * classificar com clareza, e aí a escolha fica manual na conferência. */
-  tipoDetectado: 'cnh' | 'rg' | null;
+  tipoDetectado: 'cnh' | 'rg' | 'ficha_associativa' | null;
   ocrNome: string | null;
   ocrCpf: string | null;
   confianca: 'alta' | 'baixa';
@@ -1499,6 +1762,7 @@ export interface OcrPreviewItem {
   autoConfirmavel: boolean;
   associadoJaTemCnh: boolean;
   associadoJaTemRg: boolean;
+  associadoJaTemFicha: boolean;
 }
 
 /** Lê cada arquivo já enviado pra um key de staging (presignStagingUpload),
@@ -1544,6 +1808,7 @@ async function lerDocumentosOcr(
         autoConfirmavel: lido.confianca === 'alta' && Boolean(associadoValido) && lido.tipoDocumento !== null,
         associadoJaTemCnh: docs.has('cnh'),
         associadoJaTemRg: docs.has('rg'),
+        associadoJaTemFicha: docs.has('ficha_associativa'),
       };
     }),
   );
@@ -1843,6 +2108,9 @@ export const serverStore = {
   cancelSubmissao,
   addRegistro,
   deleteRegistro,
+  parseArquivoImportacao,
+  lerDocumentosOcrParaImportacao,
+  importarRegistros,
   transitionStatus,
   revealDocument,
   revealAssociadoCpf,

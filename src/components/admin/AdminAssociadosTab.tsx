@@ -241,7 +241,7 @@ export const AdminAssociadosTab: React.FC<AdminAssociadosTabProps> = ({ associad
               <p className="text-[10px] text-slate-500 uppercase font-bold">Telefone (WhatsApp)</p>
               <p className="text-xs font-bold text-slate-800 mt-0.5 flex items-center gap-1.5">
                 <Phone className="w-3.5 h-3.5 text-slate-400" />
-                {associado.telefone_whatsapp}
+                {associado.telefone_whatsapp || 'não informado'}
               </p>
             </div>
             <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
@@ -546,7 +546,7 @@ export const AdminAssociadosTab: React.FC<AdminAssociadosTabProps> = ({ associad
                 <div className="space-y-1 text-[11px] text-slate-600">
                   <p className="flex items-center gap-1.5 truncate">
                     <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    {a.telefone_whatsapp}
+                    {a.telefone_whatsapp || 'não informado'}
                   </p>
                   {a.email && (
                     <p className="flex items-center gap-1.5 truncate">

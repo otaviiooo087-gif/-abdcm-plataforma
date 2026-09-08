@@ -12,19 +12,21 @@ const MIME_PDF = 'application/pdf';
 const DocumentoSchema = z.object({
   nome: z.string().nullable(),
   cpf: z.string().nullable(),
-  tipoDocumento: z.enum(['cnh', 'rg']).nullable(),
+  tipoDocumento: z.enum(['cnh', 'rg', 'ficha_associativa']).nullable(),
   confianca: z.enum(['alta', 'baixa']),
 });
 
 const DOCUMENTO_VAZIO: DocumentoLido = { nome: null, cpf: null, tipoDocumento: null, confianca: 'baixa' };
 
 const PROMPT_EXTRACAO =
-  'Este arquivo é uma CNH (Carteira Nacional de Habilitação) ou um RG brasileiro — pode ser ' +
-  'uma foto ou um PDF (a CNH costuma vir em PDF baixado do app do Detran/Serpro). O parceiro ' +
-  'não separou os arquivos por tipo, então identifique você qual é. Extraia o nome completo ' +
-  'do titular, o número de CPF e o tipo do documento ("cnh" ou "rg"). Retorne o CPF só com os ' +
-  '11 dígitos, sem pontuação nem traço. Se não conseguir ler o nome, o CPF ou identificar o ' +
-  'tipo com clareza, retorne null nesse campo — nunca invente ou complete dígitos que não ' +
+  'Este arquivo é um destes três documentos: uma CNH (Carteira Nacional de Habilitação) ' +
+  'brasileira, um RG brasileiro, ou uma Ficha Associativa da ABDCM (formulário de filiação ' +
+  'preenchido, com nome e CPF do associado impressos ou digitados nele). Pode ser uma foto ou ' +
+  'um PDF (a CNH costuma vir em PDF baixado do app do Detran/Serpro). O parceiro não separou os ' +
+  'arquivos por tipo, então identifique você qual é. Extraia o nome completo da pessoa, o ' +
+  'número de CPF e o tipo do documento ("cnh", "rg" ou "ficha_associativa"). Retorne o CPF só ' +
+  'com os 11 dígitos, sem pontuação nem traço. Se não conseguir ler o nome, o CPF ou identificar ' +
+  'o tipo com clareza, retorne null nesse campo — nunca invente ou complete dígitos que não ' +
   'conseguiu ver, nem chute o tipo se o documento não deixar claro. Use confianca "alta" ' +
   'somente quando o CPF tiver os 11 dígitos claramente legíveis e sem ambiguidade; em ' +
   'qualquer outro caso, use "baixa".';
