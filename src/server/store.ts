@@ -214,6 +214,8 @@ function servicoDeLinha(s: ServicoRow): Servico {
     prazo_dias: s.prazoDias,
     usa_listas: s.usaListas,
     ativo: s.ativo,
+    foto_url: s.fotoUrl,
+    link_redirecionamento: s.linkRedirecionamento,
     created_at: s.createdAt,
   };
 }
@@ -222,6 +224,7 @@ function contratoDeLinha(c: ContratoRow): Contrato {
   return {
     id: c.id,
     tenant_id: c.tenantId,
+    titulo: c.titulo,
     nome_arquivo: c.nomeArquivo,
     mime_type: c.mimeType,
     conteudo_base64: c.conteudoBase64,
@@ -405,6 +408,34 @@ async function registrarParceiro(input: {
   const sessao = usuarioParaSessao(row!);
   const token = criarTokenSessao(row!.id);
   return { sessao, token };
+}
+
+async function alterarSenha(
+  usuarioId: string,
+  senhaAtual: string,
+  novaSenha: string,
+): Promise<{ ok: true } | { erro: string }> {
+  if (novaSenha.length < 8) return { erro: 'A nova senha precisa ter pelo menos 8 caracteres.' };
+
+  const [row] = await db().select().from(schema.usuarios).where(eq(schema.usuarios.id, usuarioId)).limit(1);
+  if (!row || !row.ativo) return { erro: 'Conta não encontrada.' };
+  if (!verifyPassword(senhaAtual, row.senhaHash)) return { erro: 'Senha atual incorreta.' };
+
+  await db().update(schema.usuarios).set({ senhaHash: hashPassword(novaSenha) }).where(eq(schema.usuarios.id, usuarioId));
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: row.tenantId,
+    atorUserId: usuarioId,
+    acao: 'SENHA_ALTERADA',
+    entidadeTipo: 'usuarios',
+    entidadeId: usuarioId,
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Meu-Perfil',
+    ocorridoEm: new Date().toISOString(),
+  });
+
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------------
@@ -1518,6 +1549,8 @@ async function createServico(data: {
   preco: number;
   prazoDias: number;
   usaListas: boolean;
+  fotoUrl?: string;
+  linkRedirecionamento?: string;
 }): Promise<Servico> {
   if (!data.nome?.trim()) throw new Error('Nome do serviço é obrigatório.');
   if (!Number.isInteger(data.preco) || data.preco < 0) throw new Error('Preço deve ser um valor inteiro em centavos.');
@@ -1532,6 +1565,8 @@ async function createServico(data: {
     prazoDias: data.prazoDias,
     usaListas: data.usaListas,
     ativo: true,
+    fotoUrl: data.fotoUrl?.trim() || null,
+    linkRedirecionamento: data.linkRedirecionamento?.trim() || null,
     createdAt: new Date().toISOString(),
   };
   await db().insert(schema.servicos).values(novo);
@@ -1540,7 +1575,16 @@ async function createServico(data: {
 
 async function updateServico(
   id: string,
-  data: Partial<{ nome: string; descricao: string | null; preco: number; prazoDias: number; usaListas: boolean; ativo: boolean }>,
+  data: Partial<{
+    nome: string;
+    descricao: string | null;
+    preco: number;
+    prazoDias: number;
+    usaListas: boolean;
+    ativo: boolean;
+    fotoUrl: string | null;
+    linkRedirecionamento: string | null;
+  }>,
 ): Promise<Servico> {
   const [atual] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, id));
   if (!atual) throw new Error('Serviço não encontrado.');
@@ -1552,6 +1596,8 @@ async function updateServico(
   if (data.prazoDias !== undefined) patch.prazoDias = data.prazoDias;
   if (data.usaListas !== undefined) patch.usaListas = data.usaListas;
   if (data.ativo !== undefined) patch.ativo = data.ativo;
+  if (data.fotoUrl !== undefined) patch.fotoUrl = data.fotoUrl;
+  if (data.linkRedirecionamento !== undefined) patch.linkRedirecionamento = data.linkRedirecionamento;
 
   await db().update(schema.servicos).set(patch).where(eq(schema.servicos.id, id));
   return servicoDeLinha({ ...atual, ...patch });
@@ -1591,33 +1637,45 @@ async function deleteServico(
 }
 
 // ---------------------------------------------------------------------
-// Contrato-modelo (o admin anexa; associados/parceiros só leem)
+// Contratos e Documentos Complementares (o admin anexa quantos quiser —
+// ficha associativa modelo, contrato de intermediação etc; associados e
+// parceiros só leem/baixam).
 // ---------------------------------------------------------------------
 
-async function getContrato(): Promise<Contrato | null> {
-  const linhas = await db().select().from(schema.contratos).where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID));
-  const linha = linhas[0];
-  return linha ? contratoDeLinha(linha) : null;
+async function getContratos(): Promise<Contrato[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.contratos)
+    .where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.contratos.atualizadoEm));
+  return linhas.map(contratoDeLinha);
 }
 
-/** Substitui o contrato vigente (mantém só um por tenant). */
-async function setContrato(data: { nomeArquivo: string; mimeType: string; conteudoBase64: string }): Promise<Contrato> {
+async function addContrato(data: {
+  titulo: string;
+  nomeArquivo: string;
+  mimeType: string;
+  conteudoBase64: string;
+}): Promise<Contrato> {
+  if (!data.titulo.trim()) throw new Error('Título do documento é obrigatório.');
   if (!data.nomeArquivo || !data.conteudoBase64) {
-    throw new Error('Arquivo do contrato é obrigatório.');
+    throw new Error('Arquivo do documento é obrigatório.');
   }
-  return db().transaction(async (tx) => {
-    await tx.delete(schema.contratos).where(eq(schema.contratos.tenantId, ABDCM_TENANT_ID));
-    const novo = {
-      id: novoId('contrato'),
-      tenantId: ABDCM_TENANT_ID,
-      nomeArquivo: data.nomeArquivo,
-      mimeType: data.mimeType,
-      conteudoBase64: data.conteudoBase64,
-      atualizadoEm: new Date().toISOString(),
-    };
-    await tx.insert(schema.contratos).values(novo);
-    return contratoDeLinha(novo as ContratoRow);
-  });
+  const novo = {
+    id: novoId('contrato'),
+    tenantId: ABDCM_TENANT_ID,
+    titulo: data.titulo.trim(),
+    nomeArquivo: data.nomeArquivo,
+    mimeType: data.mimeType,
+    conteudoBase64: data.conteudoBase64,
+    atualizadoEm: new Date().toISOString(),
+  };
+  await db().insert(schema.contratos).values(novo);
+  return contratoDeLinha(novo as ContratoRow);
+}
+
+async function deleteContrato(id: string): Promise<void> {
+  await db().delete(schema.contratos).where(and(eq(schema.contratos.id, id), eq(schema.contratos.tenantId, ABDCM_TENANT_ID)));
 }
 
 // ---------------------------------------------------------------------
@@ -2209,6 +2267,7 @@ export const serverStore = {
   buscarUsuarioPorId,
   autenticarUsuario,
   registrarParceiro,
+  alterarSenha,
   getLotes,
   getAssociados,
   getRegistros,
@@ -2239,8 +2298,9 @@ export const serverStore = {
   createServico,
   updateServico,
   deleteServico,
-  getContrato,
-  setContrato,
+  getContratos,
+  addContrato,
+  deleteContrato,
   confirmarPagamentoPixWebhook,
   getPixCobrancaPorSubmissao,
   getAutomacoesConfig,

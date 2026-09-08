@@ -186,6 +186,27 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // 1.3 Troca de senha — só pra quem está de fato logado com conta real
+  // (cookie assinado); modo demonstração não tem senha pra trocar.
+  app.post('/api/auth/change-password', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (!session.autenticado) {
+      res.status(401).json({ error: 'Faça login com sua conta para trocar a senha.' });
+      return;
+    }
+    const { senhaAtual, novaSenha } = req.body ?? {};
+    if (typeof senhaAtual !== 'string' || typeof novaSenha !== 'string') {
+      res.status(400).json({ error: 'Senha atual e nova senha são obrigatórias.' });
+      return;
+    }
+    const resultado = await serverStore.alterarSenha(session.id, senhaAtual, novaSenha);
+    if ('erro' in resultado) {
+      res.status(400).json({ error: resultado.erro });
+      return;
+    }
+    res.json({ success: true });
+  });
+
   // 2. Lotes
   app.get('/api/lotes', async (_req: Request, res: Response) => {
     res.json(await serverStore.getLotes());
@@ -604,8 +625,16 @@ async function startServer() {
         res.status(403).json({ error: 'Apenas a equipe ABDCM cadastra serviços.' });
         return;
       }
-      const { nome, descricao, preco, prazoDias, usaListas } = req.body;
-      const novo = await serverStore.createServico({ nome, descricao, preco, prazoDias, usaListas });
+      const { nome, descricao, preco, prazoDias, usaListas, fotoUrl, linkRedirecionamento } = req.body;
+      const novo = await serverStore.createServico({
+        nome,
+        descricao,
+        preco,
+        prazoDias,
+        usaListas,
+        fotoUrl,
+        linkRedirecionamento,
+      });
       res.status(201).json(novo);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao cadastrar serviço';
@@ -645,24 +674,40 @@ async function startServer() {
     }
   });
 
-  // 6.3 Contrato-modelo (admin anexa; parceiro só lê)
-  app.get('/api/contrato', async (_req: Request, res: Response) => {
-    const contrato = await serverStore.getContrato();
-    res.json(contrato);
+  // 6.3 Contratos e Documentos Complementares (admin anexa quantos quiser —
+  // ficha associativa modelo, contrato de intermediação etc; parceiro só lê)
+  app.get('/api/contratos', async (_req: Request, res: Response) => {
+    const contratos = await serverStore.getContratos();
+    res.json(contratos);
   });
 
-  app.post('/api/contrato', async (req: Request, res: Response) => {
+  app.post('/api/contratos', async (req: Request, res: Response) => {
     try {
       const session = serverStore.getSession();
       if (session.role === 'parceiro') {
-        res.status(403).json({ error: 'Apenas a equipe ABDCM anexa o contrato.' });
+        res.status(403).json({ error: 'Apenas a equipe ABDCM anexa documentos.' });
         return;
       }
-      const { nomeArquivo, mimeType, conteudoBase64 } = req.body;
-      const contrato = await serverStore.setContrato({ nomeArquivo, mimeType, conteudoBase64 });
+      const { titulo, nomeArquivo, mimeType, conteudoBase64 } = req.body;
+      const contrato = await serverStore.addContrato({ titulo, nomeArquivo, mimeType, conteudoBase64 });
       res.status(201).json(contrato);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Erro ao anexar contrato';
+      const msg = err instanceof Error ? err.message : 'Erro ao anexar documento';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/contratos/:id', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM remove documentos.' });
+        return;
+      }
+      await serverStore.deleteContrato(req.params.id);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao remover documento';
       res.status(400).json({ error: msg });
     }
   });

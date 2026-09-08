@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Servico } from '../../domain/types.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
-import { ShoppingBag, Plus, Trash2, X } from 'lucide-react';
+import { ShoppingBag, Plus, Trash2, X, ImagePlus, Link2, Pencil, ImageOff } from 'lucide-react';
 
 const REASON_CODES: { value: string; label: string }[] = [
   { value: 'duplicado', label: 'Serviço duplicado' },
@@ -15,7 +15,17 @@ const emptyForm = {
   precoReais: '',
   prazoDias: '',
   usaListas: false,
+  fotoUrl: '',
+  linkRedirecionamento: '',
 };
+
+const lerArquivoComoDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Erro ao ler a imagem.'));
+    reader.readAsDataURL(file);
+  });
 
 export const AdminServicosTab: React.FC = () => {
   const [servicos, setServicos] = useState<Servico[]>([]);
@@ -26,6 +36,12 @@ export const AdminServicosTab: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<Servico | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [deleteObs, setDeleteObs] = useState('');
+  const fotoInputRef = useRef<HTMLInputElement>(null);
+
+  const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ fotoUrl: '', linkRedirecionamento: '' });
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const editFotoInputRef = useRef<HTMLInputElement>(null);
 
   const loadServicos = () => {
     fetch('/api/servicos')
@@ -64,6 +80,8 @@ export const AdminServicosTab: React.FC = () => {
           preco: precoCentavos,
           prazoDias: prazo,
           usaListas: form.usaListas,
+          fotoUrl: form.fotoUrl || undefined,
+          linkRedirecionamento: form.linkRedirecionamento || undefined,
         }),
       });
       const data = await res.json();
@@ -75,6 +93,57 @@ export const AdminServicosTab: React.FC = () => {
       setFormError(err instanceof Error ? err.message : 'Erro ao cadastrar serviço');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleFotoSelecionadaNoForm = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await lerArquivoComoDataUrl(file);
+      setForm((f) => ({ ...f, fotoUrl: dataUrl }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao ler a imagem.');
+    }
+  };
+
+  const handleAbrirEdicao = (servico: Servico) => {
+    setEditandoId(servico.id);
+    setEditForm({ fotoUrl: servico.foto_url || '', linkRedirecionamento: servico.link_redirecionamento || '' });
+  };
+
+  const handleFotoSelecionadaNaEdicao = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await lerArquivoComoDataUrl(file);
+      setEditForm((f) => ({ ...f, fotoUrl: dataUrl }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao ler a imagem.');
+    }
+  };
+
+  const handleSalvarEdicao = async () => {
+    if (!editandoId) return;
+    setIsSavingEdit(true);
+    try {
+      const res = await fetch(`/api/servicos/${editandoId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fotoUrl: editForm.fotoUrl || null,
+          linkRedirecionamento: editForm.linkRedirecionamento || null,
+        }),
+      });
+      if (!res.ok) throw new Error('Erro ao salvar');
+      setEditandoId(null);
+      loadServicos();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao salvar alterações');
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -188,6 +257,41 @@ export const AdminServicosTab: React.FC = () => {
               />
               Funciona por listas/lotes (igual à Ação Coletiva Limpa Nome)
             </label>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Foto de capa
+                </label>
+                <div className="flex items-center gap-2">
+                  {form.fotoUrl && (
+                    <img src={form.fotoUrl} alt="" className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => fotoInputRef.current?.click()}
+                    className="px-3 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <ImagePlus className="w-3.5 h-3.5" />
+                    {form.fotoUrl ? 'Trocar foto' : 'Anexar foto'}
+                  </button>
+                  <input ref={fotoInputRef} type="file" accept="image/*" className="hidden" onChange={handleFotoSelecionadaNoForm} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Link de redirecionamento
+                </label>
+                <input
+                  type="text"
+                  value={form.linkRedirecionamento}
+                  onChange={(e) => setForm({ ...form, linkRedirecionamento: e.target.value })}
+                  placeholder="https://wa.me/... ou outra página"
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30"
+                />
+              </div>
+            </div>
+
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -229,37 +333,125 @@ export const AdminServicosTab: React.FC = () => {
                 </tr>
               ) : (
                 servicos.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50/80">
-                    <td className="px-4 py-3 font-semibold text-slate-900">{s.nome}</td>
-                    <td className="px-4 py-3 font-bold">{formatCurrencyBRL(s.preco)}</td>
-                    <td className="px-4 py-3">{s.prazo_dias} dias</td>
-                    <td className="px-4 py-3">
-                      {s.usa_listas ? 'Por listas' : 'Serviço único'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleAtivo(s)}
-                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
-                          s.ativo
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-slate-100 text-slate-500 border-slate-200'
-                        }`}
-                      >
-                        {s.ativo ? 'Ativo' : 'Inativo'}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        title="Remover"
-                        onClick={() => setDeleteTarget(s)}
-                        className="p-1 text-red-400 hover:text-red-600 rounded hover:bg-red-50 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
+                  <React.Fragment key={s.id}>
+                    <tr className="hover:bg-slate-50/80">
+                      <td className="px-4 py-3 font-semibold text-slate-900">
+                        <div className="flex items-center gap-2.5">
+                          {s.foto_url ? (
+                            <img src={s.foto_url} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 shrink-0" />
+                          ) : (
+                            <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-300 flex items-center justify-center shrink-0">
+                              <ImageOff className="w-4 h-4" />
+                            </div>
+                          )}
+                          {s.nome}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-bold">{formatCurrencyBRL(s.preco)}</td>
+                      <td className="px-4 py-3">{s.prazo_dias} dias</td>
+                      <td className="px-4 py-3">
+                        {s.usa_listas ? 'Por listas' : 'Serviço único'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAtivo(s)}
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer ${
+                            s.ativo
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-slate-100 text-slate-500 border-slate-200'
+                          }`}
+                        >
+                          {s.ativo ? 'Ativo' : 'Inativo'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            title="Editar foto e link"
+                            onClick={() => (editandoId === s.id ? setEditandoId(null) : handleAbrirEdicao(s))}
+                            className="p-1 text-slate-400 hover:text-[#148296] rounded hover:bg-slate-100 cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            title="Remover"
+                            onClick={() => setDeleteTarget(s)}
+                            className="p-1 text-red-400 hover:text-red-600 rounded hover:bg-red-50 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {editandoId === s.id && (
+                      <tr className="bg-slate-50/60">
+                        <td colSpan={6} className="px-4 py-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start max-w-xl">
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                Foto de capa
+                              </label>
+                              <div className="flex items-center gap-2">
+                                {editForm.fotoUrl && (
+                                  <img src={editForm.fotoUrl} alt="" className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => editFotoInputRef.current?.click()}
+                                  className="px-3 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-100 border border-[#148296]/40 rounded-lg flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <ImagePlus className="w-3.5 h-3.5" />
+                                  {editForm.fotoUrl ? 'Trocar foto' : 'Anexar foto'}
+                                </button>
+                                <input
+                                  ref={editFotoInputRef}
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={handleFotoSelecionadaNaEdicao}
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                Link de redirecionamento
+                              </label>
+                              <div className="flex items-center gap-1.5">
+                                <Link2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <input
+                                  type="text"
+                                  value={editForm.linkRedirecionamento}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, linkRedirecionamento: e.target.value }))}
+                                  placeholder="https://wa.me/... ou outra página"
+                                  className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex justify-end gap-2 mt-3">
+                            <button
+                              type="button"
+                              onClick={() => setEditandoId(null)}
+                              className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSavingEdit}
+                              onClick={handleSalvarEdicao}
+                              className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs cursor-pointer disabled:opacity-50"
+                            >
+                              {isSavingEdit ? 'Salvando...' : 'Salvar'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))
               )}
             </tbody>

@@ -199,6 +199,8 @@ export interface Servico {
   prazo_dias: number;
   usa_listas: boolean; // funciona como a Ação Coletiva (com envio de listas) ou não
   ativo: boolean;
+  foto_url?: string | null;
+  link_redirecionamento?: string | null;
   created_at: string;
 }
 
@@ -206,6 +208,7 @@ export interface Servico {
 export interface Contrato {
   id: string;
   tenant_id: string;
+  titulo: string;
   nome_arquivo: string;
   mime_type: string;
   conteudo_base64: string;

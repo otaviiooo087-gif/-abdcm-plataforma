@@ -144,12 +144,15 @@ export const servicos = pgTable('servicos', {
   prazoDias: integer('prazo_dias').notNull(),
   usaListas: boolean('usa_listas').notNull().default(false),
   ativo: boolean('ativo').notNull().default(true),
+  fotoUrl: text('foto_url'),
+  linkRedirecionamento: text('link_redirecionamento'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
 export const contratos = pgTable('contratos', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull(),
+  titulo: text('titulo').notNull().default('Contrato Limpa Nome'),
   nomeArquivo: text('nome_arquivo').notNull(),
   mimeType: text('mime_type').notNull(),
   conteudoBase64: text('conteudo_base64').notNull(),

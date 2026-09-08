@@ -18,6 +18,8 @@ import {
   Settings,
   Zap,
   Users,
+  UserCircle,
+  HelpCircle,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -178,7 +180,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }`}
               >
                 <FileSignature className="w-4 h-4 opacity-90 shrink-0" />
-                <span>Contrato Limpa Nome</span>
+                <span>Contratos e Documentos</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="border-t border-white/10 pt-3">
+            <p className="text-[10px] font-bold text-white/60 uppercase tracking-wider px-3 mb-1.5">
+              CONTA
+            </p>
+            <div className="space-y-0.5">
+              <button
+                onClick={() => onSelectParceiroTab?.('meu-perfil')}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
+                  parceiroTab === 'meu-perfil'
+                    ? 'bg-[#0c4f5d] font-bold text-white'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <UserCircle className="w-4 h-4 opacity-90 shrink-0" />
+                <span>Meu Perfil</span>
+              </button>
+
+              <button
+                onClick={() => onSelectParceiroTab?.('ajuda')}
+                className={`w-full px-3 py-2 rounded-lg flex items-center gap-2.5 text-left transition-colors cursor-pointer ${
+                  parceiroTab === 'ajuda'
+                    ? 'bg-[#0c4f5d] font-bold text-white'
+                    : 'text-white/80 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <HelpCircle className="w-4 h-4 opacity-90 shrink-0" />
+                <span>Ajuda</span>
               </button>
             </div>
           </div>
