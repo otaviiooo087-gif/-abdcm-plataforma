@@ -48,11 +48,12 @@ import { getLigacaoProvider } from '../integrations/ligacao/index.js';
 import { ORGAOS_BUREAU } from '../domain/types.js';
 import { getNadaConstaProvider } from '../integrations/nadaconsta/index.js';
 import { ABDCM_TENANT_ID, SEED_USERS, type UserSession } from './mockData.js';
-import { maskDocument } from '../lib/masking/documentMasker.js';
+import { maskDocument, formatDocumentFull } from '../lib/masking/documentMasker.js';
 import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
 import { getStorageProvider, storageProviderConfigurado } from '../integrations/storage/index.js';
 import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integrations/whatsapp/index.js';
 import { getOcrProvider } from '../integrations/ocr/index.js';
+import { gerarFichaAssociativaPdf } from '../domain/associados/ficha.js';
 import { hashPassword, verifyPassword } from './auth/password.js';
 import { criarTokenSessao } from './auth/session.js';
 import { sessaoRealAtual } from './auth/context.js';
@@ -1297,10 +1298,18 @@ async function lerDocumentosOcrParaImportacao(
   );
 }
 
-/** Ficha associativa anexada em massa e confirmada pelo parceiro conta como
- * filiação assinada (I5): grava consentimento com data, IP de quem enviou
- * e hash do arquivo, e audita a transição de status. */
-async function marcarFichaAssinadaPorImportacao(associadoId: string, fichaKey: string, atorUserId: string): Promise<void> {
+/** Ficha associativa anexada (por importação em planilha ou gerada
+ * automaticamente a partir de um documento) conta como filiação assinada
+ * (I5): grava consentimento com data, IP de quem enviou e hash do arquivo,
+ * e audita a transição de status. `fichaDocumentoId` no Associado guarda a
+ * storage key da ficha (não o id da linha em documentos_associado) — é o
+ * que já dá pra baixar direto via StorageProvider.criarUrlDownload. */
+async function marcarFichaAssinadaPorImportacao(
+  associadoId: string,
+  fichaKey: string,
+  atorUserId: string,
+  opcoes?: { ip?: string; acao?: string; userAgent?: string },
+): Promise<void> {
   const [atual] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
   if (!atual) return;
 
@@ -1316,13 +1325,14 @@ async function marcarFichaAssinadaPorImportacao(associadoId: string, fichaKey: s
     console.error(`[marcarFichaAssinadaPorImportacao] falha ao calcular hash da ficha de ${associadoId}:`, err);
   }
 
+  const ip = opcoes?.ip ?? '127.0.0.1';
   const now = new Date().toISOString();
   await db()
     .update(schema.associados)
     .set({
       statusFiliacao: 'ficha_assinada',
       consentimentoEm: now,
-      consentimentoIp: '127.0.0.1',
+      consentimentoIp: ip,
       consentimentoHash: hash,
       fichaDocumentoId: fichaKey,
     })
@@ -1332,13 +1342,13 @@ async function marcarFichaAssinadaPorImportacao(associadoId: string, fichaKey: s
     id: novoId('audit'),
     tenantId: atual.tenantId,
     atorUserId,
-    acao: 'ASSOCIADO_FICHA_ASSINADA_IMPORTACAO',
+    acao: opcoes?.acao ?? 'ASSOCIADO_FICHA_ASSINADA_IMPORTACAO',
     entidadeTipo: 'associados',
     entidadeId: associadoId,
     antes: { statusFiliacao: atual.statusFiliacao },
     depois: { statusFiliacao: 'ficha_assinada', consentimentoHash: hash },
-    ip: '127.0.0.1',
-    userAgent: 'ABDCM-Partner-Portal',
+    ip,
+    userAgent: opcoes?.userAgent ?? 'ABDCM-Partner-Portal',
     ocorridoEm: now,
   });
 }
@@ -2995,6 +3005,93 @@ async function confirmarDocumentoUpload(data: {
     });
 }
 
+export interface FichaAssociativaGerada {
+  associadoId: string;
+  fichaKey: string;
+  nome: string;
+  cpf: string;
+}
+
+/** Gera automaticamente a ficha associativa (Termo de Autorização e
+ * Representação) de um associado a partir de um documento de identidade
+ * (RG/CNH) já enviado pro storage (mesmo key de presignStagingUpload) — o
+ * fluxo "o parceiro só envia o documento" (upload → OCR → PDF pronto).
+ *
+ * Nome e CPF impressos na ficha vêm SEMPRE do registro já cadastrado do
+ * associado (confirmado por humano na tela de cadastro), nunca de uma nova
+ * leitura de OCR aqui — evita que um erro de leitura vá parar impresso num
+ * documento com peso jurídico. O OCR roda de novo só pra achar onde está a
+ * assinatura na foto (assinaturaCoords), que é puramente visual.
+ *
+ * A cópia da assinatura colada no PDF NUNCA é o que vale como consentimento
+ * (I5/I8) — quem grava consentimento_em/ip/hash de verdade é
+ * marcarFichaAssinadaPorImportacao, reaproveitada aqui como no fluxo de
+ * importação por planilha. */
+async function gerarFichaAssociativaAutomatica(
+  associadoId: string,
+  key: string,
+  mimeType: string,
+  atorUserId: string,
+  ip: string,
+  parceiroId?: string,
+): Promise<FichaAssociativaGerada> {
+  const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, associadoId));
+  if (!associado) throw new Error('Associado não encontrado.');
+  if (parceiroId && associado.parceiroId !== parceiroId) {
+    throw new Error('Este associado não pertence ao seu cadastro.');
+  }
+
+  const documentoUrl = resolverUrlAbsoluta(await getStorageProvider().criarUrlDownload(key, URL_STORAGE_EXPIRA_SEGUNDOS));
+  const respostaDocumento = await fetch(documentoUrl);
+  if (!respostaDocumento.ok) throw new Error('Não foi possível ler o documento enviado.');
+  const documentoBytes = await respostaDocumento.arrayBuffer();
+
+  const lido = await getOcrProvider().lerDocumento({ documentoUrl, mimeType });
+
+  const pdfBytes = await gerarFichaAssociativaPdf({
+    nome: associado.nome,
+    // O CPF/CNPJ impresso na ficha precisa vir por extenso — é documento
+    // jurídico usado pra protocolo junto aos birôs, não tela administrativa
+    // (o mascaramento do I6 é só pra exibição em tela, nunca pro documento
+    // que efetivamente prova a filiação e o consentimento do associado).
+    cpf: formatDocumentFull(associado.cpfCnpjRaw),
+    documentoBytes,
+    documentoMimeType: mimeType,
+    assinaturaCoords: lido.assinaturaCoords,
+  });
+
+  const fichaKey = `documentos/${associado.tenantId}/${associadoId}/ficha_associativa.pdf`;
+  const { uploadUrl, headers } = await getStorageProvider().criarUrlUpload({
+    key: fichaKey,
+    contentType: 'application/pdf',
+    expiraEmSegundos: URL_STORAGE_EXPIRA_SEGUNDOS,
+  });
+  const respostaUpload = await fetch(resolverUrlAbsoluta(uploadUrl), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/pdf', ...(headers ?? {}) },
+    body: pdfBytes,
+  });
+  if (!respostaUpload.ok) throw new Error('Falha ao salvar a ficha gerada.');
+
+  await confirmarDocumentoUpload({
+    associadoId,
+    tipo: 'ficha_associativa',
+    key: fichaKey,
+    mimeType: 'application/pdf',
+    nomeArquivo: `ficha_associativa_${nomeArquivoSeguro(associado.nome)}.pdf`,
+    tamanhoBytes: pdfBytes.byteLength,
+    atorUserId,
+  });
+
+  await marcarFichaAssinadaPorImportacao(associadoId, fichaKey, atorUserId, {
+    ip,
+    acao: 'GERAR_FICHA_ASSOCIATIVA_AUTOMATICA',
+    userAgent: 'ABDCM-Portal',
+  });
+
+  return { associadoId, fichaKey, nome: associado.nome, cpf: associado.cpfCnpj };
+}
+
 type StatusDocumentosAssociado = Record<TipoDocumento, boolean>;
 
 async function getDocumentosStatus(parceiroId?: string): Promise<Record<string, StatusDocumentosAssociado>> {
@@ -3369,6 +3466,7 @@ export const serverStore = {
   presignStagingUpload,
   lerDocumentosOcr,
   confirmarDocumentoUpload,
+  gerarFichaAssociativaAutomatica,
   getDocumentosStatus,
   getDocumentoDownloadUrl,
 };

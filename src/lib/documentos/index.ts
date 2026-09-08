@@ -22,3 +22,27 @@ export function documentosEsperados(tipoDocumento: 'cpf' | 'cnpj'): { tipo: keyo
         { tipo: 'ficha_associativa', label: 'Ficha Associativa' },
       ];
 }
+
+/** Sobe um arquivo local pro storage de staging (sem associado nem tipo
+ * ainda conhecidos — só depois de lido por OCR é que se sabe do que se
+ * trata). Compartilhado entre toda tela que anexa CNH/RG por upload direto
+ * (Importar Lista, Cadastrar por Documento). */
+export async function stageArquivo(file: File): Promise<{ key: string; mimeType: string; nomeArquivo: string }> {
+  const mimeType = file.type || 'application/octet-stream';
+  const presignRes = await fetch('/api/documentos/staging/presign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mimeType }),
+  });
+  const presignData = await presignRes.json();
+  if (!presignRes.ok) throw new Error(presignData.error || 'Falha ao autorizar upload');
+
+  const uploadRes = await fetch(presignData.uploadUrl, {
+    method: 'PUT',
+    headers: presignData.headers || {},
+    body: file,
+  });
+  if (!uploadRes.ok) throw new Error('Falha ao enviar o arquivo pro armazenamento');
+
+  return { key: presignData.key, mimeType, nomeArquivo: file.name };
+}

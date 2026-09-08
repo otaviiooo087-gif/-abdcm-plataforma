@@ -1317,10 +1317,40 @@ async function startServer() {
     try {
       const session = serverStore.getSession();
       const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
-      const url = await serverStore.getDocumentoDownloadUrl(req.params.id, req.params.tipo as 'cnh' | 'rg', session.id, parceiroId);
+      const url = await serverStore.getDocumentoDownloadUrl(
+        req.params.id,
+        req.params.tipo as 'cnh' | 'rg' | 'comprovante_inscricao' | 'ficha_associativa',
+        session.id,
+        parceiroId,
+      );
       res.json({ url });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao gerar link de download';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // Gera automaticamente a ficha associativa (Termo de Autorização e
+  // Representação) de um associado a partir de um documento de identidade
+  // já enviado ao storage (mesmo key de /api/documentos/staging/presign) —
+  // OCR extrai onde está a assinatura na foto, o servidor monta o PDF e
+  // grava consentimento (data/IP/hash) no associado (I5).
+  app.post('/api/associados/:id/gerar-ficha-automatica', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      const { key, mimeType } = req.body;
+      const parceiroId = session.role === 'parceiro' ? session.parceiro_id : undefined;
+      const resultado = await serverStore.gerarFichaAssociativaAutomatica(
+        req.params.id,
+        key,
+        mimeType,
+        session.id,
+        req.ip ?? '127.0.0.1',
+        parceiroId,
+      );
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar ficha associativa';
       res.status(400).json({ error: msg });
     }
   });

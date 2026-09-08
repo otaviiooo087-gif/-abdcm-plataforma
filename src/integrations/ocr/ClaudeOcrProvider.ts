@@ -14,9 +14,10 @@ const DocumentoSchema = z.object({
   cpf: z.string().nullable(),
   tipoDocumento: z.enum(['cnh', 'rg', 'ficha_associativa']).nullable(),
   confianca: z.enum(['alta', 'baixa']),
+  assinaturaCoords: z.tuple([z.number(), z.number(), z.number(), z.number()]).nullable(),
 });
 
-const DOCUMENTO_VAZIO: DocumentoLido = { nome: null, cpf: null, tipoDocumento: null, confianca: 'baixa' };
+const DOCUMENTO_VAZIO: DocumentoLido = { nome: null, cpf: null, tipoDocumento: null, confianca: 'baixa', assinaturaCoords: null };
 
 const PROMPT_EXTRACAO =
   'Este arquivo é um destes três documentos: uma CNH (Carteira Nacional de Habilitação) ' +
@@ -29,7 +30,11 @@ const PROMPT_EXTRACAO =
   'o tipo com clareza, retorne null nesse campo — nunca invente ou complete dígitos que não ' +
   'conseguiu ver, nem chute o tipo se o documento não deixar claro. Use confianca "alta" ' +
   'somente quando o CPF tiver os 11 dígitos claramente legíveis e sem ambiguidade; em ' +
-  'qualquer outro caso, use "baixa".';
+  'qualquer outro caso, use "baixa". Além disso, se for uma foto (nunca em PDF) e houver uma ' +
+  'ASSINATURA manuscrita visível no documento, localize seu retângulo e retorne em ' +
+  'assinaturaCoords como [ymin, xmin, ymax, xmax], normalizado de 0 a 1000 em relação ao ' +
+  'tamanho da imagem, com origem no canto superior esquerdo. Se não houver assinatura visível ' +
+  'ou o arquivo for um PDF, retorne null nesse campo.';
 
 export class ClaudeOcrProvider implements OcrProvider {
   private client: Anthropic;
@@ -66,11 +71,18 @@ export class ClaudeOcrProvider implements OcrProvider {
       const parsed = response.parsed_output;
       if (!parsed) return DOCUMENTO_VAZIO;
 
+      const coords = parsed.assinaturaCoords;
+      const assinaturaCoords: [number, number, number, number] | null =
+        ehImagem && coords && coords.length === 4 && coords.every((n) => typeof n === 'number')
+          ? [coords[0]!, coords[1]!, coords[2]!, coords[3]!]
+          : null;
+
       return {
         nome: parsed.nome?.trim() || null,
         cpf: parsed.cpf ? parsed.cpf.replace(/\D/g, '') : null,
         tipoDocumento: parsed.tipoDocumento,
         confianca: parsed.confianca,
+        assinaturaCoords,
       };
     } catch (err) {
       console.error('[ClaudeOcrProvider] falha ao ler documento:', err);

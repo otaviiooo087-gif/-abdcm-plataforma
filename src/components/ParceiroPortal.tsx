@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { CadastrarNomeModal } from './partner/CadastrarNomeModal.js';
 import { ImportarListaModal } from './partner/ImportarListaModal.js';
+import { CadastrarPorDocumentoModal } from './partner/CadastrarPorDocumentoModal.js';
 import { EnviarListaModal } from './partner/EnviarListaModal.js';
 import { PixPagamentoModal } from './partner/PixPagamentoModal.js';
 import { PagamentoConfirmadoModal } from './partner/PagamentoConfirmadoModal.js';
@@ -96,6 +97,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   // Modais
   const [showCadastrarModal, setShowCadastrarModal] = useState(false);
   const [showImportarModal, setShowImportarModal] = useState(false);
+  const [showCadastrarPorDocumentoModal, setShowCadastrarPorDocumentoModal] = useState(false);
   const [showEnviarModal, setShowEnviarModal] = useState(false);
   const [documentosStatus, setDocumentosStatus] = useState<Record<string, StatusDocumentos>>({});
 
@@ -1446,6 +1448,15 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
           <UploadCloud className="w-4 h-4" />
           Importar Lista
         </button>
+
+        <button
+          type="button"
+          onClick={() => setShowCadastrarPorDocumentoModal(true)}
+          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
+        >
+          <FileSignature className="w-4 h-4" />
+          Cadastrar por Documento
+        </button>
       </div>
 
       {/* FAB flutuante — mesma ação do hero, sempre alcançável mesmo depois
@@ -1828,6 +1839,12 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         onClose={() => setShowImportarModal(false)}
         onSuccess={() => onRefreshData?.()}
         nomeLoteVigente={nomeLoteVigente}
+      />
+
+      <CadastrarPorDocumentoModal
+        isOpen={showCadastrarPorDocumentoModal}
+        onClose={() => setShowCadastrarPorDocumentoModal(false)}
+        onSuccess={() => onRefreshData?.()}
       />
 
       <EnviarListaModal

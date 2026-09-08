@@ -32,6 +32,16 @@ export interface DocumentoLido {
   tipoDocumento: 'cnh' | 'rg' | 'ficha_associativa' | null;
   /** 'alta' só quando o CPF foi lido com todos os 11 dígitos claros e sem ambiguidade. */
   confianca: 'alta' | 'baixa';
+  /** Retângulo da assinatura manuscrita encontrada no documento, normalizado
+   * de 0 a 1000 no formato [ymin, xmin, ymax, xmax] (origem no canto
+   * superior esquerdo da imagem). Só faz sentido para foto (nunca PDF) —
+   * usado só para POSICIONAR uma cópia visual da assinatura na ficha
+   * associativa gerada automaticamente (src/domain/associados/ficha.ts).
+   * Isso NUNCA é o que comprova o consentimento do associado (I5) — a prova
+   * real é o registro separado de consentimento_em/ip/hash gravado no
+   * momento da geração; a imagem é só um facilitador visual. null quando não
+   * encontrou assinatura no documento. */
+  assinaturaCoords: [number, number, number, number] | null;
 }
 
 export interface OcrProvider {
