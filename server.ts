@@ -814,6 +814,16 @@ async function startServer() {
   });
 
   // 6.6 Status das integrações (Configurações > APIs) — nunca expõe a chave, só se está configurada.
+  // 6.5.1 Métricas extras do Dashboard (parceiros novos, rankings) — admin only
+  app.get('/api/admin/dashboard-extra', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM vê essas métricas.' });
+      return;
+    }
+    res.json(await serverStore.getDashboardExtra());
+  });
+
   app.get('/api/config/status', (_req: Request, res: Response) => {
     res.json({
       pix: { provider: 'asaas', configurado: pixProviderConfigurado() },
@@ -821,6 +831,51 @@ async function startServer() {
       storage: { provider: 'r2', configurado: storageProviderConfigurado() },
       ocr: { provider: 'claude', configurado: ocrProviderConfigurado() },
     });
+  });
+
+  // 6.6.1 Dados cadastrais da empresa (Configurações > Empresa)
+  app.get('/api/config/empresa', async (_req: Request, res: Response) => {
+    res.json(await serverStore.getConfiguracaoEmpresa());
+  });
+
+  app.put('/api/config/empresa', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM edita os dados da empresa.' });
+        return;
+      }
+      const {
+        razaoSocial,
+        cnpj,
+        endereco,
+        telefone,
+        email,
+        bancoNome,
+        bancoAgencia,
+        bancoConta,
+        bancoPixChave,
+        oabNumero,
+        oabUf,
+      } = req.body;
+      const atualizado = await serverStore.setConfiguracaoEmpresa({
+        razao_social: razaoSocial || '',
+        cnpj: cnpj || '',
+        endereco: endereco || '',
+        telefone: telefone || '',
+        email: email || '',
+        banco_nome: bancoNome || '',
+        banco_agencia: bancoAgencia || '',
+        banco_conta: bancoConta || '',
+        banco_pix_chave: bancoPixChave || '',
+        oab_numero: oabNumero || '',
+        oab_uf: oabUf || '',
+      });
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao salvar dados da empresa';
+      res.status(400).json({ error: msg });
+    }
   });
 
   // 6.7 Automações de WhatsApp — configuração das regras + log de envios

@@ -36,6 +36,7 @@ import type {
   RegistroOrgaoStatus,
   NadaConstaEmissao,
   OrgaoBureau,
+  ConfiguracaoEmpresa,
 } from '../domain/types.js';
 import { ORGAOS_BUREAU } from '../domain/types.js';
 import { getNadaConstaProvider } from '../integrations/nadaconsta/index.js';
@@ -489,6 +490,78 @@ async function getSubmissoes(): Promise<Submissao[]> {
 async function getProcessEvents(): Promise<ProcessEvent[]> {
   const linhas = await db().select().from(schema.processEvents);
   return linhas.map(eventoDeLinha);
+}
+
+/** Métricas extras do Dashboard — tudo calculado de dado real (nada
+ * inventado): parceiros novos, ranking de parceiros por volume enviado, e
+ * ranking de lotes/Ações Coletivas por volume (o "ranking de serviços"
+ * pedido — hoje só a Ação Limpa Nome tem venda de verdade rastreada; o
+ * catálogo de Serviços ainda não tem fluxo de compra próprio). */
+async function getDashboardExtra(): Promise<{
+  parceirosNovos30dias: number;
+  parceirosTotal: number;
+  rankingParceiros: { parceiro_id: string; nome: string; nomes_enviados: number; valor_pago: number }[];
+  rankingLotes: { lote_id: string; nome: string; nomes_enviados: number; valor_pago: number }[];
+}> {
+  const usuariosParceiro = await db()
+    .select()
+    .from(schema.usuarios)
+    .where(and(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID), eq(schema.usuarios.role, 'parceiro')));
+
+  const trintaDiasAtras = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const parceirosNovos30dias = usuariosParceiro.filter((u) => new Date(u.createdAt) >= trintaDiasAtras).length;
+
+  const nomeParceiro = new Map<string, string>();
+  for (const u of usuariosParceiro) if (u.parceiroId) nomeParceiro.set(u.parceiroId, u.nome);
+  for (const s of SEED_USERS) {
+    if (s.role === 'parceiro' && s.parceiro_id && !nomeParceiro.has(s.parceiro_id)) {
+      nomeParceiro.set(s.parceiro_id, s.nome);
+    }
+  }
+
+  const todosRegistros = await db().select().from(schema.registros);
+  const todasSubmissoes = await db().select().from(schema.submissoes);
+  const enviadoOuAlem = new Set(['enviado', 'aguardando_pagamento', 'pago', 'aguardando_protocolo', 'protocolado', 'baixado', 'recusado']);
+
+  const porParceiro = new Map<string, { nomes: number; valor: number }>();
+  const porLote = new Map<string, { nomes: number; valor: number }>();
+  for (const r of todosRegistros) {
+    if (!enviadoOuAlem.has(r.processStatus)) continue;
+    const p = porParceiro.get(r.parceiroId) ?? { nomes: 0, valor: 0 };
+    p.nomes += 1;
+    porParceiro.set(r.parceiroId, p);
+    const l = porLote.get(r.loteId) ?? { nomes: 0, valor: 0 };
+    l.nomes += 1;
+    porLote.set(r.loteId, l);
+  }
+  for (const s of todasSubmissoes) {
+    if (s.paymentStatus !== 'pago') continue;
+    const p = porParceiro.get(s.parceiroId) ?? { nomes: 0, valor: 0 };
+    p.valor += s.valorTotal;
+    porParceiro.set(s.parceiroId, p);
+    const l = porLote.get(s.loteId) ?? { nomes: 0, valor: 0 };
+    l.valor += s.valorTotal;
+    porLote.set(s.loteId, l);
+  }
+
+  const rankingParceiros = [...porParceiro.entries()]
+    .map(([parceiro_id, v]) => ({
+      parceiro_id,
+      nome: nomeParceiro.get(parceiro_id) || `Parceiro ${parceiro_id.slice(0, 12)}`,
+      nomes_enviados: v.nomes,
+      valor_pago: v.valor,
+    }))
+    .sort((a, b) => b.nomes_enviados - a.nomes_enviados);
+
+  const lotesRows = await db().select({ id: schema.lotes.id, nome: schema.lotes.nome }).from(schema.lotes);
+  const nomeLote = new Map(lotesRows.map((l) => [l.id, l.nome]));
+  const rankingLotes = [...porLote.entries()]
+    .map(([lote_id, v]) => ({ lote_id, nome: nomeLote.get(lote_id) || lote_id, nomes_enviados: v.nomes, valor_pago: v.valor }))
+    .sort((a, b) => b.valor_pago - a.valor_pago);
+
+  const parceirosTotal = new Set([...nomeParceiro.keys(), ...porParceiro.keys()]).size;
+
+  return { parceirosNovos30dias, parceirosTotal, rankingParceiros, rankingLotes };
 }
 
 async function getAuditLogs(): Promise<AuditLog[]> {
@@ -1891,6 +1964,71 @@ async function deleteEventoNoticia(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------
+// Dados cadastrais da empresa (empresa, banco, OAB) — uma linha por tenant
+// ---------------------------------------------------------------------
+
+async function getConfiguracaoEmpresa(): Promise<ConfiguracaoEmpresa> {
+  const [linha] = await db().select().from(schema.configuracaoEmpresa).where(eq(schema.configuracaoEmpresa.tenantId, ABDCM_TENANT_ID));
+  if (linha) {
+    return {
+      tenant_id: linha.tenantId,
+      razao_social: linha.razaoSocial,
+      cnpj: linha.cnpj,
+      endereco: linha.endereco,
+      telefone: linha.telefone,
+      email: linha.email,
+      banco_nome: linha.bancoNome,
+      banco_agencia: linha.bancoAgencia,
+      banco_conta: linha.bancoConta,
+      banco_pix_chave: linha.bancoPixChave,
+      oab_numero: linha.oabNumero,
+      oab_uf: linha.oabUf,
+      atualizado_em: linha.atualizadoEm,
+    };
+  }
+  const now = new Date().toISOString();
+  return {
+    tenant_id: ABDCM_TENANT_ID,
+    razao_social: '',
+    cnpj: '',
+    endereco: '',
+    telefone: '',
+    email: '',
+    banco_nome: '',
+    banco_agencia: '',
+    banco_conta: '',
+    banco_pix_chave: '',
+    oab_numero: '',
+    oab_uf: '',
+    atualizado_em: now,
+  };
+}
+
+async function setConfiguracaoEmpresa(data: Omit<ConfiguracaoEmpresa, 'tenant_id' | 'atualizado_em'>): Promise<ConfiguracaoEmpresa> {
+  const now = new Date().toISOString();
+  const linha = {
+    tenantId: ABDCM_TENANT_ID,
+    razaoSocial: data.razao_social,
+    cnpj: data.cnpj,
+    endereco: data.endereco,
+    telefone: data.telefone,
+    email: data.email,
+    bancoNome: data.banco_nome,
+    bancoAgencia: data.banco_agencia,
+    bancoConta: data.banco_conta,
+    bancoPixChave: data.banco_pix_chave,
+    oabNumero: data.oab_numero,
+    oabUf: data.oab_uf,
+    atualizadoEm: now,
+  };
+  await db()
+    .insert(schema.configuracaoEmpresa)
+    .values(linha)
+    .onConflictDoUpdate({ target: schema.configuracaoEmpresa.tenantId, set: linha });
+  return { ...data, tenant_id: ABDCM_TENANT_ID, atualizado_em: now };
+}
+
+// ---------------------------------------------------------------------
 // Contratos e Documentos Complementares (o admin anexa quantos quiser —
 // ficha associativa modelo, contrato de intermediação etc; associados e
 // parceiros só leem/baixam).
@@ -2552,6 +2690,9 @@ export const serverStore = {
   createServico,
   updateServico,
   deleteServico,
+  getDashboardExtra,
+  getConfiguracaoEmpresa,
+  setConfiguracaoEmpresa,
   getContratos,
   addContrato,
   deleteContrato,

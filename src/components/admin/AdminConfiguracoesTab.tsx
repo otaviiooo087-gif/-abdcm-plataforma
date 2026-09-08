@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Contrato } from '../../domain/types.js';
+import { Contrato, ConfiguracaoEmpresa } from '../../domain/types.js';
 import {
   Settings,
   FileSignature,
@@ -11,9 +11,26 @@ import {
   CheckCircle2,
   XCircle,
   Trash2,
+  Building2,
+  Save,
+  Scale,
 } from 'lucide-react';
 
-type ConfigSubTab = 'geral' | 'apis';
+type ConfigSubTab = 'empresa' | 'geral' | 'apis';
+
+const EMPTY_EMPRESA: Omit<ConfiguracaoEmpresa, 'tenant_id' | 'atualizado_em'> = {
+  razao_social: '',
+  cnpj: '',
+  endereco: '',
+  telefone: '',
+  email: '',
+  banco_nome: '',
+  banco_agencia: '',
+  banco_conta: '',
+  banco_pix_chave: '',
+  oab_numero: '',
+  oab_uf: '',
+};
 
 interface StatusIntegracoes {
   pix: { provider: string; configurado: boolean };
@@ -21,12 +38,73 @@ interface StatusIntegracoes {
 }
 
 export const AdminConfiguracoesTab: React.FC = () => {
-  const [subTab, setSubTab] = useState<ConfigSubTab>('geral');
+  const [subTab, setSubTab] = useState<ConfigSubTab>('empresa');
   const [contratos, setContratos] = useState<Contrato[]>([]);
   const [tituloNovoDocumento, setTituloNovoDocumento] = useState('');
   const [isUploadingContrato, setIsUploadingContrato] = useState(false);
   const [status, setStatus] = useState<StatusIntegracoes | null>(null);
   const contratoInputRef = useRef<HTMLInputElement>(null);
+
+  const [empresa, setEmpresa] = useState(EMPTY_EMPRESA);
+  const [salvandoEmpresa, setSalvandoEmpresa] = useState(false);
+  const [empresaSalva, setEmpresaSalva] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/config/empresa')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: ConfiguracaoEmpresa | null) => {
+        if (data) setEmpresa(data);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSalvarEmpresa = async () => {
+    setSalvandoEmpresa(true);
+    setEmpresaSalva(false);
+    try {
+      const res = await fetch('/api/config/empresa', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          razaoSocial: empresa.razao_social,
+          cnpj: empresa.cnpj,
+          endereco: empresa.endereco,
+          telefone: empresa.telefone,
+          email: empresa.email,
+          bancoNome: empresa.banco_nome,
+          bancoAgencia: empresa.banco_agencia,
+          bancoConta: empresa.banco_conta,
+          bancoPixChave: empresa.banco_pix_chave,
+          oabNumero: empresa.oab_numero,
+          oabUf: empresa.oab_uf,
+        }),
+      });
+      if (!res.ok) throw new Error('Erro ao salvar');
+      setEmpresaSalva(true);
+      setTimeout(() => setEmpresaSalva(false), 3000);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao salvar dados da empresa');
+    } finally {
+      setSalvandoEmpresa(false);
+    }
+  };
+
+  const campoEmpresa = (
+    label: string,
+    campo: keyof typeof EMPTY_EMPRESA,
+    placeholder?: string,
+  ) => (
+    <div>
+      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">{label}</label>
+      <input
+        type="text"
+        value={empresa[campo]}
+        onChange={(e) => setEmpresa({ ...empresa, [campo]: e.target.value })}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30"
+      />
+    </div>
+  );
 
   const loadContratos = () => {
     fetch('/api/contratos')
@@ -102,6 +180,18 @@ export const AdminConfiguracoesTab: React.FC = () => {
       <div className="flex items-center gap-1 border-b border-slate-200">
         <button
           type="button"
+          onClick={() => setSubTab('empresa')}
+          className={`px-4 py-2.5 text-xs font-bold border-b-2 -mb-px cursor-pointer transition-colors flex items-center gap-1.5 ${
+            subTab === 'empresa'
+              ? 'border-[#148296] text-[#148296]'
+              : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <Building2 className="w-3.5 h-3.5" />
+          Empresa
+        </button>
+        <button
+          type="button"
           onClick={() => setSubTab('geral')}
           className={`px-4 py-2.5 text-xs font-bold border-b-2 -mb-px cursor-pointer transition-colors ${
             subTab === 'geral'
@@ -124,6 +214,71 @@ export const AdminConfiguracoesTab: React.FC = () => {
           APIs
         </button>
       </div>
+
+      {subTab === 'empresa' && (
+        <div className="space-y-5 max-w-2xl">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-[#148296]" />
+              <h3 className="text-sm font-bold text-slate-900">Dados da Empresa</h3>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {campoEmpresa('Razão Social', 'razao_social', 'Associação Brasileira de Defesa do Consumidor')}
+              {campoEmpresa('CNPJ', 'cnpj', '00.000.000/0001-00')}
+              {campoEmpresa('Telefone', 'telefone', '(11) 0000-0000')}
+              {campoEmpresa('E-mail', 'email', 'contato@abdcm.org.br')}
+            </div>
+            {campoEmpresa('Endereço', 'endereco', 'Rua, número, bairro, cidade — UF')}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <QrCode className="w-4 h-4 text-[#148296]" />
+              <h3 className="text-sm font-bold text-slate-900">Conta Bancária</h3>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {campoEmpresa('Banco', 'banco_nome', 'Ex: Banco do Brasil')}
+              {campoEmpresa('Agência', 'banco_agencia', '0000')}
+              {campoEmpresa('Conta', 'banco_conta', '00000-0')}
+              {campoEmpresa('Chave PIX', 'banco_pix_chave', 'financeiro@abdcm.org.br')}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <Scale className="w-4 h-4 text-[#148296]" />
+              <h3 className="text-sm font-bold text-slate-900">OAB (monitoramento de processos)</h3>
+            </div>
+            <p className="text-xs text-slate-500">
+              Número da OAB usado numa futura integração de monitoramento automático de processos
+              junto aos tribunais. Nenhum provedor está contratado ainda — o sistema guarda o
+              número, mas a consulta automática fica pendente até uma conta real ser configurada.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {campoEmpresa('Número da OAB', 'oab_numero', '000000')}
+              {campoEmpresa('UF', 'oab_uf', 'SP')}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={salvandoEmpresa}
+              onClick={handleSalvarEmpresa}
+              className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" />
+              {salvandoEmpresa ? 'Salvando...' : 'Salvar Dados'}
+            </button>
+            {empresaSalva && (
+              <span className="text-xs font-bold text-emerald-600 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Salvo com sucesso
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {subTab === 'geral' && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-4 max-w-2xl">

@@ -1,7 +1,7 @@
-import React from 'react';
-import { Lote, Registro, Submissao } from '../../domain/types.js';
+import React, { useEffect, useState } from 'react';
+import { Lote, Registro, Submissao, Servico } from '../../domain/types.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
-import { TrendingUp, Clock, Layers, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { TrendingUp, Clock, Layers, CheckCircle2, AlertTriangle, UserPlus, Users, Trophy, ShoppingBag } from 'lucide-react';
 
 interface AdminDashboardTabProps {
   lotes: Lote[];
@@ -9,7 +9,30 @@ interface AdminDashboardTabProps {
   submissoes: Submissao[];
 }
 
+interface DashboardExtra {
+  parceirosNovos30dias: number;
+  parceirosTotal: number;
+  rankingParceiros: { parceiro_id: string; nome: string; nomes_enviados: number; valor_pago: number }[];
+  rankingLotes: { lote_id: string; nome: string; nomes_enviados: number; valor_pago: number }[];
+}
+
+const MEDALHA = ['🥇', '🥈', '🥉'];
+
 export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ lotes, registros, submissoes }) => {
+  const [extra, setExtra] = useState<DashboardExtra | null>(null);
+  const [servicos, setServicos] = useState<Servico[]>([]);
+
+  useEffect(() => {
+    fetch('/api/admin/dashboard-extra')
+      .then((res) => (res.ok ? res.json() : null))
+      .then(setExtra)
+      .catch(() => setExtra(null));
+    fetch('/api/servicos')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: Servico[]) => setServicos(data))
+      .catch(() => setServicos([]));
+  }, []);
+
   const faturamentoConfirmado = submissoes
     .filter((s) => s.payment_status === 'pago')
     .reduce((acc, s) => acc + s.valor_total, 0);
@@ -46,18 +69,18 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ lotes, reg
     <div className="space-y-6">
       <div>
         <h2 className="text-lg font-bold text-slate-900">Dashboard</h2>
-        <p className="text-xs text-slate-500 mt-0.5">Resumo geral da operação e do faturamento</p>
+        <p className="text-xs text-slate-500 mt-0.5">Resumo geral da operação, faturamento e desempenho</p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
+        <div className="bg-gradient-to-br from-[#106778] to-[#148296] p-5 rounded-xl shadow-lg text-white">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+            <span className="text-[11px] font-bold text-white/70 uppercase tracking-wider">
               Faturamento Confirmado
             </span>
-            <TrendingUp className="w-4 h-4 text-emerald-500" />
+            <TrendingUp className="w-4 h-4 text-emerald-300" />
           </div>
-          <p className="text-2xl font-black text-slate-900 mt-1">{formatCurrencyBRL(faturamentoConfirmado)}</p>
+          <p className="text-2xl font-black mt-1">{formatCurrencyBRL(faturamentoConfirmado)}</p>
         </div>
 
         <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
@@ -91,6 +114,95 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ lotes, reg
           </div>
           <p className="text-2xl font-black text-slate-900 mt-1">{baixados}</p>
           <p className="text-[11px] text-slate-500 mt-1">de {totalRegistros} associados na base</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              Novos Parceiros (30 dias)
+            </span>
+            <UserPlus className="w-4 h-4 text-sky-500" />
+          </div>
+          <p className="text-2xl font-black text-slate-900 mt-1">{extra?.parceirosNovos30dias ?? '—'}</p>
+        </div>
+
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              Parceiros Ativos
+            </span>
+            <Users className="w-4 h-4 text-[#148296]" />
+          </div>
+          <p className="text-2xl font-black text-slate-900 mt-1">{extra?.parceirosTotal ?? '—'}</p>
+        </div>
+
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs sm:col-span-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              Catálogo de Serviços
+            </span>
+            <ShoppingBag className="w-4 h-4 text-[#148296]" />
+          </div>
+          <p className="text-2xl font-black text-slate-900 mt-1">
+            {servicos.filter((s) => s.ativo).length}
+            <span className="text-sm font-medium text-slate-400"> ativos de {servicos.length}</span>
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Ranking de Parceiros */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-amber-500" />
+            <h3 className="text-sm font-bold text-slate-900">Ranking de Parceiros</h3>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {!extra || extra.rankingParceiros.length === 0 ? (
+              <p className="px-6 py-8 text-center text-xs text-slate-400">Sem envios registrados ainda.</p>
+            ) : (
+              extra.rankingParceiros.slice(0, 6).map((p, idx) => (
+                <div key={p.parceiro_id} className="px-6 py-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-6 text-center text-sm shrink-0">{MEDALHA[idx] || idx + 1}</span>
+                    <span className="text-xs font-semibold text-slate-800 truncate">{p.nome}</span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-bold text-slate-900">{p.nomes_enviados} nomes</p>
+                    <p className="text-[10px] text-slate-500">{formatCurrencyBRL(p.valor_pago)}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Ranking de Serviços (por Ação Coletiva — é onde a venda real acontece hoje) */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-emerald-500" />
+            <h3 className="text-sm font-bold text-slate-900">Serviços com Mais Saída</h3>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {!extra || extra.rankingLotes.length === 0 ? (
+              <p className="px-6 py-8 text-center text-xs text-slate-400">Sem vendas registradas ainda.</p>
+            ) : (
+              extra.rankingLotes.slice(0, 6).map((l, idx) => (
+                <div key={l.lote_id} className="px-6 py-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-6 text-center text-sm shrink-0">{MEDALHA[idx] || idx + 1}</span>
+                    <span className="text-xs font-semibold text-slate-800 truncate">{l.nome}</span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-bold text-slate-900">{l.nomes_enviados} nomes</p>
+                    <p className="text-[10px] text-slate-500">{formatCurrencyBRL(l.valor_pago)}</p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
 

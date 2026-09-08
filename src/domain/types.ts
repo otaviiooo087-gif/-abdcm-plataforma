@@ -258,6 +258,26 @@ export interface NotificacaoEnviada {
   enviado_em: string;
 }
 
+// Dados cadastrais da ABDCM (empresa, conta bancária, OAB) — aba
+// Configurações > Empresa. OAB é pra uma futura integração de
+// monitoramento de processo junto aos tribunais; nenhum provedor real
+// está contratado ainda (mesma doutrina de mock das outras integrações).
+export interface ConfiguracaoEmpresa {
+  tenant_id: string;
+  razao_social: string;
+  cnpj: string;
+  endereco: string;
+  telefone: string;
+  email: string;
+  banco_nome: string;
+  banco_agencia: string;
+  banco_conta: string;
+  banco_pix_chave: string;
+  oab_numero: string;
+  oab_uf: string;
+  atualizado_em: string;
+}
+
 // Liga/desliga e parâmetros de cada regra de automação, editável na aba Automações.
 export interface AutomacaoConfig {
   chave: TipoNotificacao;

@@ -215,6 +215,22 @@ export const usuarios = pgTable('usuarios', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
+export const configuracaoEmpresa = pgTable('configuracao_empresa', {
+  tenantId: text('tenant_id').primaryKey(),
+  razaoSocial: text('razao_social').notNull().default(''),
+  cnpj: text('cnpj').notNull().default(''),
+  endereco: text('endereco').notNull().default(''),
+  telefone: text('telefone').notNull().default(''),
+  email: text('email').notNull().default(''),
+  bancoNome: text('banco_nome').notNull().default(''),
+  bancoAgencia: text('banco_agencia').notNull().default(''),
+  bancoConta: text('banco_conta').notNull().default(''),
+  bancoPixChave: text('banco_pix_chave').notNull().default(''),
+  oabNumero: text('oab_numero').notNull().default(''),
+  oabUf: text('oab_uf').notNull().default(''),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
 export const registroOrgaos = pgTable('registro_orgaos', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id').notNull(),
