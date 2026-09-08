@@ -264,11 +264,85 @@ async function startServer() {
         return;
       }
       const { id } = req.params;
-      const { closesAt, nome } = req.body;
-      const lote = await serverStore.updateLote(id, session.id, { closesAt, nome });
+      const {
+        closesAt,
+        nome,
+        numeroProcesso,
+        varaTribunal,
+        juiz,
+        referenciaProtocolo,
+        dataProtocolo,
+        dataDistribuicao,
+        liminarStatus,
+      } = req.body;
+      const lote = await serverStore.updateLote(id, session.id, {
+        closesAt,
+        nome,
+        numeroProcesso,
+        varaTribunal,
+        juiz,
+        referenciaProtocolo,
+        dataProtocolo,
+        dataDistribuicao,
+        liminarStatus,
+      });
       res.json(lote);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao atualizar lote';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 2.1.1 Downloads em massa (planilha e documentos), sob demanda — não
+  // muda status do lote, diferente de /encerrar. Navegação direta (<a
+  // href>), então usa o cookie de sessão normal, sem precisar de fetch+blob.
+  app.get('/api/lotes/:id/planilha.xlsx', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM baixa a lista completa.' });
+        return;
+      }
+      const { buffer, nomeArquivo } = await serverStore.gerarPlanilhaLoteBuffer(req.params.id);
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+      res.send(Buffer.from(buffer));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar planilha';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/lotes/:id/documentos.zip', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM baixa os documentos em massa.' });
+        return;
+      }
+      const { buffer, nomeArquivo } = await serverStore.gerarZipDocumentosLote(req.params.id);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+      res.send(buffer);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar arquivo de documentos';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/lotes/:id/fichas-associativas.zip', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM baixa as fichas associativas em massa.' });
+        return;
+      }
+      const { buffer, nomeArquivo } = await serverStore.gerarZipDocumentosLote(req.params.id, 'ficha_associativa');
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+      res.send(buffer);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao gerar arquivo de fichas associativas';
       res.status(400).json({ error: msg });
     }
   });

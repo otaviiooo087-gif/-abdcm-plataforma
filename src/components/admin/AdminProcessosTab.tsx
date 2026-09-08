@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Lote, Registro } from '../../domain/types.js';
+import { Lote, Registro, RegistroOrgaoStatus, ORGAOS_BUREAU, ORGAO_BUREAU_LABEL } from '../../domain/types.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { UserSession } from '../../server/mockData.js';
 import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
 import { OrgaosBaixaModal } from './OrgaosBaixaModal.js';
+import { EditarLoteModal } from './EditarLoteModal.js';
 import {
   Layers,
   Search,
@@ -33,6 +34,7 @@ import {
   EyeOff,
   AlertTriangle,
   PackageCheck,
+  FileSignature,
   ExternalLink,
 } from 'lucide-react';
 
@@ -68,8 +70,8 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
   const [batchTargetStatus, setBatchTargetStatus] = useState<string>('protocolado');
   const [batchMotivo, setBatchMotivo] = useState('');
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
-  const [showAndamentoModal, setShowAndamentoModal] = useState(false);
-  const [andamentoTexto, setAndamentoTexto] = useState('');
+  const [editandoLoteId, setEditandoLoteId] = useState<string | null>(null);
+  const [statusOrgaos, setStatusOrgaos] = useState<Record<string, RegistroOrgaoStatus[]>>({});
   const [isEditingPrazo, setIsEditingPrazo] = useState(false);
   const [prazoInput, setPrazoInput] = useState('');
   const [isSavingPrazo, setIsSavingPrazo] = useState(false);
@@ -102,7 +104,25 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
       .then((res) => (res.ok ? res.json() : {}))
       .then(setDocumentosStatus)
       .catch(() => setDocumentosStatus({}));
+    fetch('/api/registro-orgaos')
+      .then((res) => (res.ok ? res.json() : {}))
+      .then(setStatusOrgaos)
+      .catch(() => setStatusOrgaos({}));
   }, []);
+
+  /** Órgão baixado no nível do lote = baixado pra todos os registros
+   * protocolados dele — mesma lógica do popup do parceiro (NomesDaListaModal). */
+  const orgaoBaixadoParaTodosNoLote = (loteId: string, orgao: string) => {
+    const protocolados = registros.filter((r) => r.lote_id === loteId && statusOrgaos[r.id]);
+    if (protocolados.length === 0) return false;
+    return protocolados.every((r) => statusOrgaos[r.id]?.find((o) => o.orgao === orgao)?.status === 'baixado');
+  };
+
+  const tempoEmProcesso = (lote: Lote): string => {
+    const inicio = new Date(lote.abre_em).getTime();
+    const dias = Math.max(0, Math.floor((Date.now() - inicio) / (1000 * 60 * 60 * 24)));
+    return dias === 0 ? 'hoje' : `${dias} dia${dias === 1 ? '' : 's'}`;
+  };
 
   const handleAbrirDocumento = async (associadoId: string, tipo: keyof StatusDocumentos) => {
     const chave = `${associadoId}:${tipo}`;
@@ -434,14 +454,29 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
             <ArrowLeft className="w-4 h-4" />
             Voltar para Ações Coletivas
           </button>
-          <button
-            type="button"
-            onClick={() => handleExportListaLote(detalhesLoteId)}
-            className="px-4 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <Download className="w-4 h-4" />
-            Baixar Arquivo (CSV)
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <a
+              href={`/api/lotes/${detalhesLoteId}/planilha.xlsx`}
+              className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Baixar Lista (XLS)
+            </a>
+            <a
+              href={`/api/lotes/${detalhesLoteId}/fichas-associativas.zip`}
+              className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <FileSignature className="w-4 h-4" />
+              Baixar Fichas Associativas
+            </a>
+            <a
+              href={`/api/lotes/${detalhesLoteId}/documentos.zip`}
+              className="px-3.5 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Baixar Documentos
+            </a>
+          </div>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5">
@@ -480,6 +515,32 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
           </div>
         </div>
 
+        {/* Andamento em tempo real: órgãos contemplados e status de cada um,
+            direto da API interna (registro_orgaos) — atualiza a cada
+            onRefreshData, sem precisar de nenhuma integração externa. */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5">
+          <h3 className="text-sm font-bold text-slate-900 mb-3">Andamento do Processo — Órgãos</h3>
+          <div className="grid grid-cols-5 gap-2">
+            {ORGAOS_BUREAU.map((orgao) => {
+              const baixado = orgaoBaixadoParaTodosNoLote(detalhesLoteId, orgao);
+              return (
+                <div key={orgao} className="flex flex-col items-center gap-1.5">
+                  <div
+                    className={`w-11 h-11 rounded-full flex items-center justify-center border-2 ${
+                      baixado ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-300'
+                    }`}
+                  >
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <span className={`text-[9px] font-bold text-center leading-tight ${baixado ? 'text-emerald-700' : 'text-slate-400'}`}>
+                    {ORGAO_BUREAU_LABEL[orgao]}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
           <div className="px-6 py-4 border-b border-slate-100">
             <h3 className="text-sm font-bold text-slate-900">Nomes desta Ação Coletiva</h3>
@@ -504,6 +565,14 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <StatusBadge status={reg.process_status} />
+                        <button
+                          type="button"
+                          onClick={() => onOpenTimeline(reg)}
+                          title="Ver linha do tempo do processo"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-[#148296] hover:bg-[#148296]/10 cursor-pointer transition-colors"
+                        >
+                          <Clock className="w-4 h-4" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => setDocsAbertoParaRegistro(docsAbertos ? null : reg.id)}
@@ -590,11 +659,12 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setShowAndamentoModal(true)}
-              className="px-3.5 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+              onClick={() => setEditandoLoteId(currentLote?.id || lotes[0]?.id || null)}
+              disabled={lotes.length === 0}
+              className="px-3.5 py-2 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
             >
-              <FileSpreadsheet className="w-4 h-4" />
-              Lançar Andamento Judicial
+              <Pencil className="w-4 h-4" />
+              Editar Ação Coletiva
             </button>
             <button
               type="button"
@@ -703,11 +773,24 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                         ? 'Baixada nos Birôs'
                         : 'Fechada'}
                     </span>
-                    {isSelected && (
-                      <span className="text-[10px] font-bold text-[#148296] flex items-center gap-1">
-                        <Check className="w-3.5 h-3.5" /> Ativa
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isSelected && (
+                        <span className="text-[10px] font-bold text-[#148296] flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" /> Ativa
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        title="Editar Ação Coletiva"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditandoLoteId(lote.id);
+                        }}
+                        className="text-slate-400 hover:text-[#148296] cursor-pointer p-0.5 rounded transition-colors"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
 
                   <h4 className="text-sm font-bold text-slate-900">{lote.nome}</h4>
@@ -762,6 +845,47 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                       </p>
                     )}
                   </div>
+
+                  {/* Tempo em processo, prazos e data do protocolo */}
+                  <div className="mt-2.5 grid grid-cols-2 gap-1.5 text-[10px]">
+                    <div className="bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5">
+                      <p className="text-slate-400 font-bold uppercase">Em processo há</p>
+                      <p className="text-slate-800 font-bold">{tempoEmProcesso(lote)}</p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5">
+                      <p className="text-slate-400 font-bold uppercase">Protocolado em</p>
+                      <p className="text-slate-800 font-bold">
+                        {lote.data_protocolo ? new Date(lote.data_protocolo).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5">
+                      <p className="text-slate-400 font-bold uppercase">Início da captação</p>
+                      <p className="text-slate-800 font-bold">{new Date(lote.abre_em).toLocaleDateString('pt-BR')}</p>
+                    </div>
+                    <div className="bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5">
+                      <p className="text-slate-400 font-bold uppercase">Prazo de encerramento</p>
+                      <p className="text-slate-800 font-bold">{new Date(lote.closes_at).toLocaleDateString('pt-BR')}</p>
+                    </div>
+                  </div>
+
+                  {/* Órgãos contemplados — cinza em processo, colorido quando baixado pra todos */}
+                  <div className="mt-2.5 flex items-center justify-between gap-1">
+                    {ORGAOS_BUREAU.map((orgao) => {
+                      const baixado = orgaoBaixadoParaTodosNoLote(lote.id, orgao);
+                      return (
+                        <div key={orgao} className="flex flex-col items-center gap-0.5" title={ORGAO_BUREAU_LABEL[orgao]}>
+                          <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center border ${
+                              baixado ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-slate-100 border-slate-200 text-slate-300'
+                            }`}
+                          >
+                            <ShieldCheck className="w-3 h-3" />
+                          </div>
+                          <span className="text-[7px] text-slate-400 font-bold leading-none">{ORGAO_BUREAU_LABEL[orgao].split(' ')[0]}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* Métricas do Lote */}
@@ -792,7 +916,7 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
                   className="mt-2 w-full pt-2 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] font-bold text-[#148296] hover:text-[#0f6b7c] cursor-pointer"
                 >
                   <FileText className="w-3.5 h-3.5" />
-                  {`Detalhes (${loteRegistros.length})`}
+                  {`Ver Detalhe do Processo (${loteRegistros.length})`}
                 </button>
               </div>
             );
@@ -1243,97 +1367,11 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
         </div>
       )}
 
-      {/* MODAL: Lançar Andamento Judicial */}
-      {showAndamentoModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-slate-200 max-w-lg w-full p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Gavel className="w-4 h-4 text-[#148296]" />
-                Lançar Andamento Judicial Oficial
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowAndamentoModal(false)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-600">
-              Registre despachos, decisões interlocutórias, expedição de ofícios aos birôs ou
-              cumprimento de sentença para a Ação Coletiva.
-            </p>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Ação Coletiva de Destino
-                </label>
-                <select
-                  defaultValue={selectedLoteId !== 'todos' ? selectedLoteId : lotes[0]?.id}
-                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800 font-semibold"
-                >
-                  {lotes.map((l) => (
-                    <option key={l.id} value={l.id}>
-                      {l.titulo} — Proc. {l.numero_processo || 'Em autuação'}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Tipo de Andamento / Despacho
-                </label>
-                <select className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800">
-                  <option>Liminar Deferida com expedição imediata de ofícios aos birôs</option>
-                  <option>Ofício Eletrônico transmitido a Serasa, SPC, Boa Vista e Cenprot</option>
-                  <option>Cumprimento de Tutela Provisória confirmado pelos órgãos</option>
-                  <option>Juntada de Comprovante de Pagamento e Emenda à Petição</option>
-                  <option>Sentença Procedente Transitada em Julgado</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Texto da Certidão / Observações da Secretaria
-                </label>
-                <textarea
-                  rows={3}
-                  value={andamentoTexto}
-                  onChange={(e) => setAndamentoTexto(e.target.value)}
-                  placeholder="Informações adicionais do despacho judicial..."
-                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30 text-slate-800"
-                ></textarea>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowAndamentoModal(false)}
-                className="px-3.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  alert('Andamento judicial registrado com sucesso na Ação Coletiva!');
-                  setShowAndamentoModal(false);
-                  setAndamentoTexto('');
-                  onRefreshData();
-                }}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer"
-              >
-                Registrar Andamento
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <EditarLoteModal
+        lote={lotes.find((l) => l.id === editandoLoteId) || null}
+        onClose={() => setEditandoLoteId(null)}
+        onSalvo={onRefreshData}
+      />
 
       {/* MODAL: Nova Ação Coletiva */}
       {showNovaAcaoModal && (

@@ -1647,7 +1647,17 @@ async function updateAssociadoStatus(
 async function updateLote(
   id: string,
   atorUserId: string,
-  campos: { closesAt?: string; nome?: string },
+  campos: {
+    closesAt?: string;
+    nome?: string;
+    numeroProcesso?: string;
+    varaTribunal?: string;
+    juiz?: string;
+    referenciaProtocolo?: string;
+    dataProtocolo?: string;
+    dataDistribuicao?: string;
+    liminarStatus?: string;
+  },
 ): Promise<Lote> {
   const [atual] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, id));
   if (!atual) throw new Error('Lote não encontrado.');
@@ -1655,6 +1665,13 @@ async function updateLote(
   const patch: Partial<LoteRow> = {};
   if (campos.closesAt) patch.closesAt = campos.closesAt;
   if (campos.nome) patch.nome = campos.nome;
+  if (campos.numeroProcesso !== undefined) patch.numeroProcesso = campos.numeroProcesso || null;
+  if (campos.varaTribunal !== undefined) patch.varaTribunal = campos.varaTribunal || null;
+  if (campos.juiz !== undefined) patch.juiz = campos.juiz || null;
+  if (campos.referenciaProtocolo !== undefined) patch.referenciaProtocolo = campos.referenciaProtocolo || null;
+  if (campos.dataProtocolo !== undefined) patch.dataProtocolo = campos.dataProtocolo || null;
+  if (campos.dataDistribuicao !== undefined) patch.dataDistribuicao = campos.dataDistribuicao || null;
+  if (campos.liminarStatus !== undefined) patch.liminarStatus = campos.liminarStatus || null;
 
   await db().update(schema.lotes).set(patch).where(eq(schema.lotes.id, id));
 
@@ -2526,6 +2543,69 @@ async function montarPlanilhaLote(
   return workbook.xlsx.writeBuffer();
 }
 
+function nomeArquivoSeguro(nome: string): string {
+  return nome.replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_') || 'acao_coletiva';
+}
+
+/** Planilha (xlsx) sob demanda de um lote — não muda status nem gera
+ * pacote, é só o download avulso que o admin pode pedir a qualquer
+ * momento (diferente de encerrarLote, que é uma ação única e destrutiva). */
+async function gerarPlanilhaLoteBuffer(loteId: string): Promise<{ buffer: ExcelJS.Buffer; nomeArquivo: string }> {
+  const [loteRow] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, loteId));
+  if (!loteRow) throw new Error('Ação Coletiva não encontrada.');
+
+  const registrosDoLote = await db().select().from(schema.registros).where(eq(schema.registros.loteId, loteId));
+  const associadoIds = [...new Set(registrosDoLote.map((r) => r.associadoId))];
+  const associadosDoLote =
+    associadoIds.length > 0 ? await db().select().from(schema.associados).where(inArray(schema.associados.id, associadoIds)) : [];
+  const associadosPorId = new Map(associadosDoLote.map((a) => [a.id, a]));
+
+  const buffer = await montarPlanilhaLote(registrosDoLote, associadosPorId);
+  return { buffer, nomeArquivo: `lista_${nomeArquivoSeguro(loteRow.nome)}.xlsx` };
+}
+
+/** ZIP de documentos de um lote, sob demanda — `apenasTipo` filtra só um
+ * tipo (ex.: só ficha_associativa). Mesma lógica de montagem de
+ * encerrarLote, mas sem nenhum efeito colateral (não fecha o lote). */
+async function gerarZipDocumentosLote(
+  loteId: string,
+  apenasTipo?: TipoDocumento,
+): Promise<{ buffer: Buffer; nomeArquivo: string }> {
+  const [loteRow] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, loteId));
+  if (!loteRow) throw new Error('Ação Coletiva não encontrada.');
+
+  const registrosDoLote = await db().select().from(schema.registros).where(eq(schema.registros.loteId, loteId));
+  const associadoIds = [...new Set(registrosDoLote.map((r) => r.associadoId))];
+  const associadosDoLote =
+    associadoIds.length > 0 ? await db().select().from(schema.associados).where(inArray(schema.associados.id, associadoIds)) : [];
+  const associadosPorId = new Map(associadosDoLote.map((a) => [a.id, a]));
+
+  let documentosDoLote =
+    associadoIds.length > 0
+      ? await db().select().from(schema.documentosAssociado).where(inArray(schema.documentosAssociado.associadoId, associadoIds))
+      : [];
+  if (apenasTipo) documentosDoLote = documentosDoLote.filter((d) => d.tipo === apenasTipo);
+
+  const zip = new JSZip();
+  for (const doc of documentosDoLote) {
+    const associado = associadosPorId.get(doc.associadoId);
+    const pastaAssociado = nomeArquivoSeguro(associado?.nome || doc.associadoId);
+    try {
+      const url = await getStorageProvider().criarUrlDownload(doc.storageKey, URL_STORAGE_EXPIRA_SEGUNDOS);
+      const resposta = await fetch(resolverUrlAbsoluta(url));
+      if (!resposta.ok) throw new Error(`status ${resposta.status}`);
+      const bytes = await resposta.arrayBuffer();
+      zip.file(`${pastaAssociado}/${doc.tipo}.${extensaoPorMime(doc.mimeType)}`, bytes);
+    } catch (err) {
+      console.error(`[gerarZipDocumentosLote] falha ao baixar documento ${doc.id} (${doc.tipo}):`, err);
+    }
+  }
+
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const sufixo = apenasTipo === 'ficha_associativa' ? 'fichas_associativas' : 'documentos';
+  return { buffer, nomeArquivo: `${sufixo}_${nomeArquivoSeguro(loteRow.nome)}.zip` };
+}
+
 /** Encerra a captação de uma Ação Coletiva: bloqueia novos envios, gera o
  * pacote (planilha + documentos anexados dos associados, em um único ZIP) e
  * avisa a equipe ABDCM no WhatsApp (I1/I9 — só quem não é parceiro aciona;
@@ -2697,6 +2777,8 @@ export const serverStore = {
   addContrato,
   deleteContrato,
   getComprovante,
+  gerarPlanilhaLoteBuffer,
+  gerarZipDocumentosLote,
   getStatusOrgaosPorParceiro,
   getNadaConstaPorParceiro,
   marcarOrgaoBaixado,
