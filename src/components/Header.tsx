@@ -48,7 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-3">
         <button
           title="Menu de Navegação"
-          className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer"
+          className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer abdcm-glow"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -73,7 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="hidden sm:flex items-center bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
           <button
             onClick={() => onSwitchSurface?.('parceiro')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer abdcm-glow ${
               currentSurface === 'parceiro'
                 ? 'bg-white text-[#106778] font-bold shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -83,7 +83,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSwitchSurface?.('admin')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer abdcm-glow ${
               currentSurface === 'admin'
                 ? 'bg-white text-[#106778] font-bold shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -93,7 +93,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => onSwitchSurface?.('publico')}
-            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+            className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer abdcm-glow ${
               currentSurface === 'publico'
                 ? 'bg-white text-[#106778] font-bold shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
@@ -143,7 +143,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               title="Sair"
               onClick={onLogout}
-              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-red-600 transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-red-600 transition-colors cursor-pointer abdcm-glow"
             >
               <LogOut className="w-4 h-4" />
             </button>

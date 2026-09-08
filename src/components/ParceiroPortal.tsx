@@ -1435,7 +1435,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         <button
           type="button"
           onClick={() => setShowCadastrarModal(true)}
-          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
+          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
         >
           <UserPlus className="w-4 h-4" />
           + Cadastrar Nome
@@ -1444,7 +1444,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         <button
           type="button"
           onClick={() => setShowImportarModal(true)}
-          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
+          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
         >
           <UploadCloud className="w-4 h-4" />
           Importar Lista
@@ -1453,7 +1453,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         <button
           type="button"
           onClick={() => setShowDocumentosModal(true)}
-          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors"
+          className="px-3.5 py-2 text-xs font-bold text-[#148296] bg-white hover:bg-slate-50 border border-[#148296]/40 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer transition-colors abdcm-glow"
         >
           <FileSpreadsheet className="w-4 h-4" />
           Anexar Documentos
