@@ -37,6 +37,9 @@ import type {
   NadaConstaEmissao,
   OrgaoBureau,
   ConfiguracaoEmpresa,
+  MarketingCronogramaDia,
+  MarketingDisparo,
+  MarketingGrupoConfig,
 } from '../domain/types.js';
 import { ORGAOS_BUREAU } from '../domain/types.js';
 import { getNadaConstaProvider } from '../integrations/nadaconsta/index.js';
@@ -219,6 +222,7 @@ function servicoDeLinha(s: ServicoRow): Servico {
     nome: s.nome,
     descricao: s.descricao,
     preco: s.preco,
+    custo: s.custo,
     prazo_dias: s.prazoDias,
     usa_listas: s.usaListas,
     ativo: s.ativo,
@@ -1867,6 +1871,7 @@ async function createServico(data: {
   nome: string;
   descricao?: string;
   preco: number;
+  custo?: number;
   prazoDias: number;
   usaListas: boolean;
   fotoUrl?: string;
@@ -1874,6 +1879,9 @@ async function createServico(data: {
 }): Promise<Servico> {
   if (!data.nome?.trim()) throw new Error('Nome do serviço é obrigatório.');
   if (!Number.isInteger(data.preco) || data.preco < 0) throw new Error('Preço deve ser um valor inteiro em centavos.');
+  if (data.custo !== undefined && (!Number.isInteger(data.custo) || data.custo < 0)) {
+    throw new Error('Custo deve ser um valor inteiro em centavos.');
+  }
   if (!Number.isInteger(data.prazoDias) || data.prazoDias < 0) throw new Error('Prazo deve ser um número inteiro de dias.');
 
   const novo = {
@@ -1882,6 +1890,7 @@ async function createServico(data: {
     nome: data.nome.trim(),
     descricao: data.descricao?.trim() || null,
     preco: data.preco,
+    custo: data.custo ?? 0,
     prazoDias: data.prazoDias,
     usaListas: data.usaListas,
     ativo: true,
@@ -1899,6 +1908,7 @@ async function updateServico(
     nome: string;
     descricao: string | null;
     preco: number;
+    custo: number;
     prazoDias: number;
     usaListas: boolean;
     ativo: boolean;
@@ -1913,6 +1923,7 @@ async function updateServico(
   if (data.nome !== undefined) patch.nome = data.nome;
   if (data.descricao !== undefined) patch.descricao = data.descricao;
   if (data.preco !== undefined) patch.preco = data.preco;
+  if (data.custo !== undefined) patch.custo = data.custo;
   if (data.prazoDias !== undefined) patch.prazoDias = data.prazoDias;
   if (data.usaListas !== undefined) patch.usaListas = data.usaListas;
   if (data.ativo !== undefined) patch.ativo = data.ativo;
@@ -1957,6 +1968,228 @@ async function deleteServico(
 }
 
 // ---------------------------------------------------------------------
+// Marketing de serviços — aba Serviços > Marketing (disparo manual,
+// cronograma semanal automático e o robô de grupos, este último MOCK).
+// ---------------------------------------------------------------------
+
+function associadosComWhatsapp() {
+  return db()
+    .select()
+    .from(schema.associados)
+    .where(and(eq(schema.associados.tenantId, ABDCM_TENANT_ID), eq(schema.associados.statusFiliacao, 'ativo')));
+}
+
+/** Dispara uma mensagem de marketing pro WhatsApp de todos os associados ativos. Real — via WhatsAppProvider. */
+async function dispararMarketingServico(
+  servicoId: string,
+  mensagem: string,
+  origem: 'manual' | 'automatico',
+  atorUserId?: string,
+): Promise<{ enviados: number; falhas: number }> {
+  const [servico] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, servicoId));
+  if (!servico) throw new Error('Serviço não encontrado.');
+  if (!mensagem?.trim()) throw new Error('Mensagem é obrigatória.');
+
+  const associadosDb = await associadosComWhatsapp();
+  let enviados = 0;
+  let falhas = 0;
+  for (const a of associadosDb) {
+    if (!a.telefoneWhatsapp) continue;
+    try {
+      await getWhatsAppProvider().enviarTexto({ telefone: a.telefoneWhatsapp, texto: mensagem.trim() });
+      enviados += 1;
+    } catch (err) {
+      falhas += 1;
+      console.error(`[marketing] falha ao enviar para ${a.telefoneWhatsapp}:`, err);
+    }
+  }
+
+  await db().insert(schema.marketingDisparos).values({
+    id: novoId('mkt'),
+    tenantId: ABDCM_TENANT_ID,
+    servicoId,
+    origem,
+    mensagem: mensagem.trim(),
+    quantidadeDestinatarios: enviados,
+    disparadoPorUserId: atorUserId ?? null,
+    disparadoEm: new Date().toISOString(),
+  });
+
+  if (atorUserId) {
+    await db().insert(schema.auditLog).values({
+      id: novoId('audit'),
+      tenantId: ABDCM_TENANT_ID,
+      atorUserId,
+      acao: 'MARKETING_DISPARO_MANUAL',
+      entidadeTipo: 'servicos',
+      entidadeId: servicoId,
+      depois: { mensagem: mensagem.trim(), enviados, falhas },
+      ip: '127.0.0.1',
+      userAgent: 'ABDCM-Admin-Console',
+      ocorridoEm: new Date().toISOString(),
+    });
+  }
+
+  return { enviados, falhas };
+}
+
+async function getMarketingLog(): Promise<MarketingDisparo[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.marketingDisparos)
+    .where(eq(schema.marketingDisparos.tenantId, ABDCM_TENANT_ID))
+    .orderBy(desc(schema.marketingDisparos.disparadoEm))
+    .limit(50);
+  return linhas.map((d) => ({
+    id: d.id,
+    tenant_id: d.tenantId,
+    servico_id: d.servicoId,
+    origem: d.origem as 'manual' | 'automatico',
+    mensagem: d.mensagem,
+    quantidade_destinatarios: d.quantidadeDestinatarios,
+    disparado_por_user_id: d.disparadoPorUserId,
+    disparado_em: d.disparadoEm,
+  }));
+}
+
+async function getMarketingCronograma(): Promise<MarketingCronogramaDia[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.marketingCronograma)
+    .where(eq(schema.marketingCronograma.tenantId, ABDCM_TENANT_ID));
+  return linhas
+    .map((l) => ({
+      id: l.id,
+      tenant_id: l.tenantId,
+      dia_semana: l.diaSemana,
+      servico_id: l.servicoId,
+      ativo: l.ativo,
+      atualizado_em: l.atualizadoEm,
+    }))
+    .sort((a, b) => a.dia_semana - b.dia_semana);
+}
+
+/** Define o serviço em destaque de um dia da semana (0=domingo..6=sábado). Upsert manual — sem constraint nomeada no Drizzle pra usar onConflictDoUpdate aqui. */
+async function setMarketingCronogramaDia(
+  diaSemana: number,
+  servicoId: string | null,
+  ativo: boolean,
+): Promise<MarketingCronogramaDia> {
+  if (!Number.isInteger(diaSemana) || diaSemana < 0 || diaSemana > 6) {
+    throw new Error('Dia da semana inválido (use 0 a 6).');
+  }
+  const [existente] = await db()
+    .select()
+    .from(schema.marketingCronograma)
+    .where(and(eq(schema.marketingCronograma.tenantId, ABDCM_TENANT_ID), eq(schema.marketingCronograma.diaSemana, diaSemana)));
+
+  const agora = new Date().toISOString();
+  if (existente) {
+    await db()
+      .update(schema.marketingCronograma)
+      .set({ servicoId, ativo, atualizadoEm: agora })
+      .where(eq(schema.marketingCronograma.id, existente.id));
+    return { id: existente.id, tenant_id: ABDCM_TENANT_ID, dia_semana: diaSemana, servico_id: servicoId, ativo, atualizado_em: agora };
+  }
+  const id = novoId('mktcron');
+  await db().insert(schema.marketingCronograma).values({
+    id,
+    tenantId: ABDCM_TENANT_ID,
+    diaSemana,
+    servicoId,
+    ativo,
+    atualizadoEm: agora,
+  });
+  return { id, tenant_id: ABDCM_TENANT_ID, dia_semana: diaSemana, servico_id: servicoId, ativo, atualizado_em: agora };
+}
+
+/**
+ * Roda pelo agendador já existente (rodarAutomacoes, a cada 15min). Dispara
+ * o serviço em destaque do dia da semana atual — no máximo uma vez por dia
+ * por serviço (checa marketing_disparos de hoje antes de mandar de novo).
+ */
+async function rodarMarketingCronogramaDoDia(): Promise<{ disparado: boolean; servicoNome?: string; enviados?: number }> {
+  const diaSemana = new Date().getDay();
+  const [linha] = await db()
+    .select()
+    .from(schema.marketingCronograma)
+    .where(and(eq(schema.marketingCronograma.tenantId, ABDCM_TENANT_ID), eq(schema.marketingCronograma.diaSemana, diaSemana)));
+  if (!linha?.ativo || !linha.servicoId) return { disparado: false };
+
+  const inicioHoje = new Date();
+  inicioHoje.setHours(0, 0, 0, 0);
+  const disparosDoServico = await db()
+    .select({ origem: schema.marketingDisparos.origem, disparadoEm: schema.marketingDisparos.disparadoEm })
+    .from(schema.marketingDisparos)
+    .where(eq(schema.marketingDisparos.servicoId, linha.servicoId));
+  const jaDisparouHoje = disparosDoServico.some((d) => d.origem === 'automatico' && new Date(d.disparadoEm) >= inicioHoje);
+  if (jaDisparouHoje) return { disparado: false };
+
+  const [servico] = await db().select().from(schema.servicos).where(eq(schema.servicos.id, linha.servicoId));
+  if (!servico || !servico.ativo) return { disparado: false };
+
+  const mensagem =
+    `${servico.nome} — Aqui é da ABDCM! Hoje é dia de dar aquele empurrão: ${servico.descricao || 'confira as condições especiais deste serviço'}. ` +
+    `Quer saber mais? Fale com o parceiro que cuidou da sua filiação.`;
+  const { enviados } = await dispararMarketingServico(linha.servicoId, mensagem, 'automatico');
+  return { disparado: true, servicoNome: servico.nome, enviados };
+}
+
+// MOCK — nenhum provedor de grupo/enquete de WhatsApp está contratado
+// (CLAUDE.md seção 8: mock primeiro, provider real só quando contratado).
+async function getMarketingGrupoConfig(): Promise<MarketingGrupoConfig> {
+  const [linha] = await db().select().from(schema.marketingGrupoConfig).where(eq(schema.marketingGrupoConfig.tenantId, ABDCM_TENANT_ID));
+  if (linha) {
+    return {
+      tenant_id: linha.tenantId,
+      nome_grupo: linha.nomeGrupo,
+      aviso_lista_ativo: linha.avisoListaAtivo,
+      marketing_ativo: linha.marketingAtivo,
+      enquetes_ativo: linha.enquetesAtivo,
+      atualizado_em: linha.atualizadoEm,
+    };
+  }
+  return {
+    tenant_id: ABDCM_TENANT_ID,
+    nome_grupo: '',
+    aviso_lista_ativo: false,
+    marketing_ativo: false,
+    enquetes_ativo: false,
+    atualizado_em: new Date().toISOString(),
+  };
+}
+
+async function setMarketingGrupoConfig(data: Partial<{
+  nomeGrupo: string;
+  avisoListaAtivo: boolean;
+  marketingAtivo: boolean;
+  enquetesAtivo: boolean;
+}>): Promise<MarketingGrupoConfig> {
+  const atual = await getMarketingGrupoConfig();
+  const agora = new Date().toISOString();
+  const novo = {
+    tenantId: ABDCM_TENANT_ID,
+    nomeGrupo: data.nomeGrupo ?? atual.nome_grupo,
+    avisoListaAtivo: data.avisoListaAtivo ?? atual.aviso_lista_ativo,
+    marketingAtivo: data.marketingAtivo ?? atual.marketing_ativo,
+    enquetesAtivo: data.enquetesAtivo ?? atual.enquetes_ativo,
+    atualizadoEm: agora,
+  };
+  await db()
+    .insert(schema.marketingGrupoConfig)
+    .values(novo)
+    .onConflictDoUpdate({ target: schema.marketingGrupoConfig.tenantId, set: novo });
+  return {
+    tenant_id: novo.tenantId,
+    nome_grupo: novo.nomeGrupo,
+    aviso_lista_ativo: novo.avisoListaAtivo,
+    marketing_ativo: novo.marketingAtivo,
+    enquetes_ativo: novo.enquetesAtivo,
+    atualizado_em: novo.atualizadoEm,
+  };
+}
+
+// ---------------------------------------------------------------------
 // Eventos e Notícias — CMS simples controlado pelo admin
 // ---------------------------------------------------------------------
 
@@ -1979,7 +2212,9 @@ async function createEventoNoticia(data: {
   dataEvento?: string;
   atorUserId: string;
 }): Promise<EventoNoticia> {
-  if (data.tipo !== 'evento' && data.tipo !== 'noticia') throw new Error('Tipo inválido (use "evento" ou "noticia").');
+  if (data.tipo !== 'evento' && data.tipo !== 'noticia' && data.tipo !== 'anuncio') {
+    throw new Error('Tipo inválido (use "evento", "noticia" ou "anuncio").');
+  }
   if (!data.titulo?.trim()) throw new Error('Título é obrigatório.');
   if (!data.descricao?.trim()) throw new Error('Descrição é obrigatória.');
   if (!data.categoria?.trim()) throw new Error('Categoria é obrigatória.');
@@ -2812,6 +3047,13 @@ export const serverStore = {
   createContestacao,
   getServicos,
   createServico,
+  dispararMarketingServico,
+  getMarketingLog,
+  getMarketingCronograma,
+  setMarketingCronogramaDia,
+  rodarMarketingCronogramaDoDia,
+  getMarketingGrupoConfig,
+  setMarketingGrupoConfig,
   updateServico,
   deleteServico,
   getDashboardExtra,

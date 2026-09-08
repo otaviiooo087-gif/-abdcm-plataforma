@@ -15,7 +15,8 @@ import {
   ArrowRight,
   ExternalLink,
 } from 'lucide-react';
-import { Lote, Registro } from '../../domain/types.js';
+import { Lote, Registro, EventoNoticia } from '../../domain/types.js';
+import { AnuncioBanner } from './AnuncioBanner.js';
 
 interface HomeViewProps {
   session?: {
@@ -25,6 +26,7 @@ interface HomeViewProps {
   } | null;
   loteVigente?: Lote;
   registros: Registro[];
+  eventosNoticias: EventoNoticia[];
   onNavigateTab: (tab: string) => void;
 }
 
@@ -32,6 +34,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   session,
   loteVigente,
   registros,
+  eventosNoticias,
   onNavigateTab,
 }) => {
   // Saudação dinâmica conforme o horário do dia
@@ -81,6 +84,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   return (
     <div className="p-8 space-y-6 overflow-y-auto flex-1 relative bg-[#F8FAFC]">
+      <AnuncioBanner eventosNoticias={eventosNoticias} />
       {/* 1. Header com Saudação */}
       <div>
         <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">

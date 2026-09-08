@@ -30,8 +30,9 @@ export const AdminEventosTab: React.FC = () => {
 
   const loadItens = () => {
     fetch('/api/eventos-noticias')
+      // anúncios são publicados e geridos pela aba Serviços > Marketing, não aqui.
       .then((res) => (res.ok ? res.json() : []))
-      .then((data: EventoNoticia[]) => setItens(data))
+      .then((data: EventoNoticia[]) => setItens(data.filter((i) => i.tipo !== 'anuncio')))
       .catch(() => setItens([]));
   };
 

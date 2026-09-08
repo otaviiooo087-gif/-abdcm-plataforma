@@ -487,6 +487,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
         session={session}
         loteVigente={loteVigente}
         registros={registros}
+        eventosNoticias={eventosNoticias}
         onNavigateTab={(tab) => onSelectParceiroTab?.(tab)}
       />
     );
@@ -1195,7 +1196,7 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   }
 
   if (parceiroTab === 'eventos') {
-    const itensAtivos = eventosNoticias.filter((e) => e.ativo);
+    const itensAtivos = eventosNoticias.filter((e) => e.ativo && e.tipo !== 'anuncio');
     const proximoEvento = itensAtivos
       .filter((e) => e.tipo === 'evento' && e.data_evento)
       .sort((a, b) => new Date(a.data_evento!).getTime() - new Date(b.data_evento!).getTime())[0];

@@ -195,13 +195,45 @@ export interface Servico {
   tenant_id: string;
   nome: string;
   descricao?: string | null;
-  preco: number; // centavos
+  preco: number; // centavos — preço final cobrado do parceiro/associado
+  custo: number; // centavos — custo interno, nunca exibido fora do admin
   prazo_dias: number;
   usa_listas: boolean; // funciona como a Ação Coletiva (com envio de listas) ou não
   ativo: boolean;
   foto_url?: string | null;
   link_redirecionamento?: string | null;
   created_at: string;
+}
+
+// Um serviço em destaque por dia da semana — aba Serviços > Marketing.
+export interface MarketingCronogramaDia {
+  id: string;
+  tenant_id: string;
+  dia_semana: number; // 0=domingo..6=sábado
+  servico_id: string | null;
+  ativo: boolean;
+  atualizado_em: string;
+}
+
+export interface MarketingDisparo {
+  id: string;
+  tenant_id: string;
+  servico_id: string;
+  origem: 'manual' | 'automatico';
+  mensagem: string;
+  quantidade_destinatarios: number;
+  disparado_por_user_id?: string | null;
+  disparado_em: string;
+}
+
+// MOCK — ver nota na migration 0012_marketing.sql / CLAUDE.md seção 8.
+export interface MarketingGrupoConfig {
+  tenant_id: string;
+  nome_grupo: string;
+  aviso_lista_ativo: boolean;
+  marketing_ativo: boolean;
+  enquetes_ativo: boolean;
+  atualizado_em: string;
 }
 
 // Contrato-modelo que o admin disponibiliza aos associados/parceiros.
@@ -326,7 +358,9 @@ export interface NadaConstaEmissao {
   emitido_em: string;
 }
 
-export type TipoEventoNoticia = 'evento' | 'noticia';
+// 'anuncio' é publicado pela aba Serviços > Marketing (banner de destaque
+// pro parceiro), não pela aba Eventos e Notícias — mesma tabela, uso separado.
+export type TipoEventoNoticia = 'evento' | 'noticia' | 'anuncio';
 
 export interface EventoNoticia {
   id: string;

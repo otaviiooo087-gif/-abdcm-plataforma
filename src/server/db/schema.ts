@@ -141,12 +141,47 @@ export const servicos = pgTable('servicos', {
   nome: text('nome').notNull(),
   descricao: text('descricao'),
   preco: integer('preco').notNull(),
+  custo: integer('custo').notNull().default(0),
   prazoDias: integer('prazo_dias').notNull(),
   usaListas: boolean('usa_listas').notNull().default(false),
   ativo: boolean('ativo').notNull().default(true),
   fotoUrl: text('foto_url'),
   linkRedirecionamento: text('link_redirecionamento'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Cronograma semanal de marketing (aba Serviços > Marketing) — um serviço
+// em destaque por dia da semana, disparado pelo agendador já existente.
+export const marketingCronograma = pgTable('marketing_cronograma', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  diaSemana: integer('dia_semana').notNull(), // 0=domingo..6=sábado
+  servicoId: text('servico_id'),
+  ativo: boolean('ativo').notNull().default(true),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Histórico de disparos de marketing (manual pelo admin ou automático pelo cronograma).
+export const marketingDisparos = pgTable('marketing_disparos', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  servicoId: text('servico_id').notNull(),
+  origem: text('origem').notNull(), // 'manual' | 'automatico'
+  mensagem: text('mensagem').notNull(),
+  quantidadeDestinatarios: integer('quantidade_destinatarios').notNull(),
+  disparadoPorUserId: text('disparado_por_user_id'),
+  disparadoEm: timestamp('disparado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+// Config do robô de grupos de WhatsApp — MOCK (ver nota na migration 0012):
+// nenhum provedor real de grupo/enquete está contratado ainda.
+export const marketingGrupoConfig = pgTable('marketing_grupo_config', {
+  tenantId: text('tenant_id').primaryKey(),
+  nomeGrupo: text('nome_grupo').notNull().default(''),
+  avisoListaAtivo: boolean('aviso_lista_ativo').notNull().default(false),
+  marketingAtivo: boolean('marketing_ativo').notNull().default(false),
+  enquetesAtivo: boolean('enquetes_ativo').notNull().default(false),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
 export const contratos = pgTable('contratos', {

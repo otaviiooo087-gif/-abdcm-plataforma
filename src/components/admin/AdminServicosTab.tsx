@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Servico } from '../../domain/types.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
-import { ShoppingBag, Plus, Trash2, X, ImagePlus, Link2, Pencil, ImageOff } from 'lucide-react';
+import { ShoppingBag, Plus, Trash2, X, ImagePlus, Link2, Pencil, ImageOff, Megaphone, ListChecks } from 'lucide-react';
+import { AdminMarketingSubTab } from './AdminMarketingSubTab.js';
 
 const REASON_CODES: { value: string; label: string }[] = [
   { value: 'duplicado', label: 'Serviço duplicado' },
@@ -12,7 +13,9 @@ const REASON_CODES: { value: string; label: string }[] = [
 
 const emptyForm = {
   nome: '',
+  descricao: '',
   precoReais: '',
+  custoReais: '',
   prazoDias: '',
   usaListas: false,
   fotoUrl: '',
@@ -28,6 +31,7 @@ const lerArquivoComoDataUrl = (file: File): Promise<string> =>
   });
 
 export const AdminServicosTab: React.FC = () => {
+  const [subTab, setSubTab] = useState<'catalogo' | 'marketing'>('catalogo');
   const [servicos, setServicos] = useState<Servico[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -39,7 +43,12 @@ export const AdminServicosTab: React.FC = () => {
   const fotoInputRef = useRef<HTMLInputElement>(null);
 
   const [editandoId, setEditandoId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ fotoUrl: '', linkRedirecionamento: '' });
+  const [editForm, setEditForm] = useState({
+    fotoUrl: '',
+    linkRedirecionamento: '',
+    descricao: '',
+    custoReais: '',
+  });
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const editFotoInputRef = useRef<HTMLInputElement>(null);
 
@@ -57,6 +66,9 @@ export const AdminServicosTab: React.FC = () => {
   const handleCreateServico = async () => {
     setFormError(null);
     const precoCentavos = Math.round(parseFloat(form.precoReais.replace(',', '.')) * 100);
+    const custoCentavos = form.custoReais.trim()
+      ? Math.round(parseFloat(form.custoReais.replace(',', '.')) * 100)
+      : 0;
     const prazo = parseInt(form.prazoDias, 10);
     if (!form.nome.trim()) {
       setFormError('Nome é obrigatório.');
@@ -64,6 +76,10 @@ export const AdminServicosTab: React.FC = () => {
     }
     if (!Number.isFinite(precoCentavos) || precoCentavos < 0) {
       setFormError('Preço inválido.');
+      return;
+    }
+    if (!Number.isFinite(custoCentavos) || custoCentavos < 0) {
+      setFormError('Custo inválido.');
       return;
     }
     if (!Number.isInteger(prazo) || prazo < 0) {
@@ -77,7 +93,9 @@ export const AdminServicosTab: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           nome: form.nome.trim(),
+          descricao: form.descricao.trim() || undefined,
           preco: precoCentavos,
+          custo: custoCentavos,
           prazoDias: prazo,
           usaListas: form.usaListas,
           fotoUrl: form.fotoUrl || undefined,
@@ -110,7 +128,12 @@ export const AdminServicosTab: React.FC = () => {
 
   const handleAbrirEdicao = (servico: Servico) => {
     setEditandoId(servico.id);
-    setEditForm({ fotoUrl: servico.foto_url || '', linkRedirecionamento: servico.link_redirecionamento || '' });
+    setEditForm({
+      fotoUrl: servico.foto_url || '',
+      linkRedirecionamento: servico.link_redirecionamento || '',
+      descricao: servico.descricao || '',
+      custoReais: servico.custo ? (servico.custo / 100).toFixed(2).replace('.', ',') : '',
+    });
   };
 
   const handleFotoSelecionadaNaEdicao = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,6 +150,13 @@ export const AdminServicosTab: React.FC = () => {
 
   const handleSalvarEdicao = async () => {
     if (!editandoId) return;
+    const custoCentavos = editForm.custoReais.trim()
+      ? Math.round(parseFloat(editForm.custoReais.replace(',', '.')) * 100)
+      : 0;
+    if (!Number.isFinite(custoCentavos) || custoCentavos < 0) {
+      alert('Custo inválido.');
+      return;
+    }
     setIsSavingEdit(true);
     try {
       const res = await fetch(`/api/servicos/${editandoId}`, {
@@ -135,6 +165,8 @@ export const AdminServicosTab: React.FC = () => {
         body: JSON.stringify({
           fotoUrl: editForm.fotoUrl || null,
           linkRedirecionamento: editForm.linkRedirecionamento || null,
+          descricao: editForm.descricao.trim() || null,
+          custo: custoCentavos,
         }),
       });
       if (!res.ok) throw new Error('Erro ao salvar');
@@ -185,21 +217,51 @@ export const AdminServicosTab: React.FC = () => {
           <ShoppingBag className="w-5 h-5 text-[#148296]" />
           <h2 className="text-lg font-bold text-slate-900">Serviços</h2>
         </div>
+        {subTab === 'catalogo' && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowForm((v) => !v);
+              setFormError(null);
+            }}
+            className="px-3 py-1.5 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Novo Serviço
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1.5 border-b border-slate-200">
         <button
           type="button"
-          onClick={() => {
-            setShowForm((v) => !v);
-            setFormError(null);
-          }}
-          className="px-3 py-1.5 text-xs font-bold text-white bg-[#148296] hover:bg-[#0f6b7c] rounded-lg shadow-xs flex items-center gap-1.5 cursor-pointer"
+          onClick={() => setSubTab('catalogo')}
+          className={`px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 border-b-2 -mb-px cursor-pointer transition-colors ${
+            subTab === 'catalogo' ? 'border-[#148296] text-[#148296]' : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
         >
-          <Plus className="w-3.5 h-3.5" />
-          Novo Serviço
+          <ListChecks className="w-3.5 h-3.5" />
+          Catálogo
+        </button>
+        <button
+          type="button"
+          onClick={() => setSubTab('marketing')}
+          className={`px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 border-b-2 -mb-px cursor-pointer transition-colors ${
+            subTab === 'marketing' ? 'border-[#148296] text-[#148296]' : 'border-transparent text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <Megaphone className="w-3.5 h-3.5" />
+          Marketing
         </button>
       </div>
-      <p className="text-xs text-slate-500 -mt-4">
-        Catálogo de serviços que a ABDCM oferece — defina nome, preço, prazo e se ele funciona
-        por listas (igual à Ação Coletiva Limpa Nome) ou como serviço único.
+
+      {subTab === 'marketing' ? (
+        <AdminMarketingSubTab servicos={servicos} />
+      ) : (
+        <>
+      <p className="text-xs text-slate-500 -mt-2">
+        Catálogo de serviços que a ABDCM oferece — defina nome, custo interno, preço final, prazo e
+        se ele funciona por listas (igual à Ação Coletiva Limpa Nome) ou como serviço único.
       </p>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-6 space-y-4">
@@ -210,7 +272,7 @@ export const AdminServicosTab: React.FC = () => {
                 {formError}
               </div>
             )}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                   Nome
@@ -225,7 +287,20 @@ export const AdminServicosTab: React.FC = () => {
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                  Preço (R$)
+                  Custo interno (R$)
+                </label>
+                <input
+                  type="text"
+                  value={form.custoReais}
+                  onChange={(e) => setForm({ ...form, custoReais: e.target.value })}
+                  placeholder="30,00"
+                  title="Quanto custa pra ABDCM oferecer — nunca aparece pro parceiro/associado"
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Preço final (R$)
                 </label>
                 <input
                   type="text"
@@ -247,6 +322,18 @@ export const AdminServicosTab: React.FC = () => {
                   className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30"
                 />
               </div>
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                Descrição
+              </label>
+              <textarea
+                value={form.descricao}
+                onChange={(e) => setForm({ ...form, descricao: e.target.value })}
+                rows={2}
+                placeholder="O que o associado recebe com este serviço — aparece no portal do parceiro."
+                className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none resize-none focus:ring-2 focus:ring-[#148296]/30"
+              />
             </div>
             <label className="flex items-center gap-2 text-xs text-slate-700 font-medium cursor-pointer">
               <input
@@ -317,7 +404,8 @@ export const AdminServicosTab: React.FC = () => {
             <thead className="bg-slate-50 text-[10px] text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
               <tr>
                 <th className="px-4 py-3">Nome</th>
-                <th className="px-4 py-3">Preço</th>
+                <th className="px-4 py-3">Custo / Preço</th>
+                <th className="px-4 py-3">Margem</th>
                 <th className="px-4 py-3">Prazo</th>
                 <th className="px-4 py-3">Tipo</th>
                 <th className="px-4 py-3">Status</th>
@@ -327,12 +415,14 @@ export const AdminServicosTab: React.FC = () => {
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {servicos.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                     Nenhum serviço cadastrado ainda.
                   </td>
                 </tr>
               ) : (
-                servicos.map((s) => (
+                servicos.map((s) => {
+                  const margem = s.preco > 0 ? Math.round(((s.preco - s.custo) / s.preco) * 100) : 0;
+                  return (
                   <React.Fragment key={s.id}>
                     <tr className="hover:bg-slate-50/80">
                       <td className="px-4 py-3 font-semibold text-slate-900">
@@ -347,7 +437,23 @@ export const AdminServicosTab: React.FC = () => {
                           {s.nome}
                         </div>
                       </td>
-                      <td className="px-4 py-3 font-bold">{formatCurrencyBRL(s.preco)}</td>
+                      <td className="px-4 py-3">
+                        <p className="text-[10px] text-slate-400">custo {formatCurrencyBRL(s.custo)}</p>
+                        <p className="font-bold text-slate-900">{formatCurrencyBRL(s.preco)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
+                            margem >= 40
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : margem >= 15
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-rose-50 text-rose-700'
+                          }`}
+                        >
+                          {margem}%
+                        </span>
+                      </td>
                       <td className="px-4 py-3">{s.prazo_dias} dias</td>
                       <td className="px-4 py-3">
                         {s.usa_listas ? 'Por listas' : 'Serviço único'}
@@ -388,8 +494,8 @@ export const AdminServicosTab: React.FC = () => {
                     </tr>
                     {editandoId === s.id && (
                       <tr className="bg-slate-50/60">
-                        <td colSpan={6} className="px-4 py-4">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start max-w-xl">
+                        <td colSpan={7} className="px-4 py-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start max-w-2xl">
                             <div>
                               <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                                 Foto de capa
@@ -430,6 +536,29 @@ export const AdminServicosTab: React.FC = () => {
                                 />
                               </div>
                             </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                Custo interno (R$)
+                              </label>
+                              <input
+                                type="text"
+                                value={editForm.custoReais}
+                                onChange={(e) => setEditForm((f) => ({ ...f, custoReais: e.target.value }))}
+                                placeholder="30,00"
+                                className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-[#148296]/30"
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                                Descrição
+                              </label>
+                              <textarea
+                                value={editForm.descricao}
+                                onChange={(e) => setEditForm((f) => ({ ...f, descricao: e.target.value }))}
+                                rows={2}
+                                className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg outline-none resize-none focus:ring-2 focus:ring-[#148296]/30"
+                              />
+                            </div>
                           </div>
                           <div className="flex justify-end gap-2 mt-3">
                             <button
@@ -452,7 +581,8 @@ export const AdminServicosTab: React.FC = () => {
                       </tr>
                     )}
                   </React.Fragment>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -522,6 +652,8 @@ export const AdminServicosTab: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

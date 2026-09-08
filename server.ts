@@ -720,11 +720,12 @@ async function startServer() {
         res.status(403).json({ error: 'Apenas a equipe ABDCM cadastra serviços.' });
         return;
       }
-      const { nome, descricao, preco, prazoDias, usaListas, fotoUrl, linkRedirecionamento } = req.body;
+      const { nome, descricao, preco, custo, prazoDias, usaListas, fotoUrl, linkRedirecionamento } = req.body;
       const novo = await serverStore.createServico({
         nome,
         descricao,
         preco,
+        custo,
         prazoDias,
         usaListas,
         fotoUrl,
@@ -765,6 +766,82 @@ async function startServer() {
       res.json({ success: true });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao remover serviço';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.1.1 Marketing de serviços — aba Serviços > Marketing (admin-only)
+  app.get('/api/marketing/log', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa o marketing de serviços.' });
+      return;
+    }
+    res.json(await serverStore.getMarketingLog());
+  });
+
+  app.get('/api/marketing/cronograma', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa o marketing de serviços.' });
+      return;
+    }
+    res.json(await serverStore.getMarketingCronograma());
+  });
+
+  app.put('/api/marketing/cronograma/:diaSemana', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM configura o marketing de serviços.' });
+        return;
+      }
+      const diaSemana = parseInt(req.params.diaSemana, 10);
+      const { servicoId, ativo } = req.body;
+      const linha = await serverStore.setMarketingCronogramaDia(diaSemana, servicoId ?? null, ativo ?? true);
+      res.json(linha);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao configurar cronograma';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/marketing/disparo', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM dispara marketing.' });
+        return;
+      }
+      const { servicoId, mensagem } = req.body;
+      const resultado = await serverStore.dispararMarketingServico(servicoId, mensagem, 'manual', session.id);
+      res.json(resultado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao disparar marketing';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.get('/api/marketing/grupo-config', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acessa o marketing de serviços.' });
+      return;
+    }
+    res.json(await serverStore.getMarketingGrupoConfig());
+  });
+
+  app.put('/api/marketing/grupo-config', async (req: Request, res: Response) => {
+    try {
+      const session = serverStore.getSession();
+      if (session.role === 'parceiro') {
+        res.status(403).json({ error: 'Apenas a equipe ABDCM configura o marketing de serviços.' });
+        return;
+      }
+      const atualizado = await serverStore.setMarketingGrupoConfig(req.body);
+      res.json(atualizado);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao salvar configuração';
       res.status(400).json({ error: msg });
     }
   });
@@ -1257,11 +1334,15 @@ async function startServer() {
   // idempotente por conta própria (ver notificacoes.ts), então rodar de
   // novo a cada intervalo é seguro.
   const INTERVALO_AUTOMACOES_MS = 15 * 60 * 1000; // 15 minutos
+  const rodarTudo = () => {
+    rodarAutomacoes().catch((err) => console.error('[automacoes] falha na rodada:', err));
+    // Cronograma semanal de marketing (aba Serviços > Marketing) — mesmo
+    // agendador, idempotente por dia (ver rodarMarketingCronogramaDoDia).
+    serverStore.rodarMarketingCronogramaDoDia().catch((err) => console.error('[marketing] falha no cronograma:', err));
+  };
   setTimeout(() => {
-    rodarAutomacoes().catch((err) => console.error('[automacoes] falha na primeira rodada:', err));
-    setInterval(() => {
-      rodarAutomacoes().catch((err) => console.error('[automacoes] falha na rodada agendada:', err));
-    }, INTERVALO_AUTOMACOES_MS);
+    rodarTudo();
+    setInterval(rodarTudo, INTERVALO_AUTOMACOES_MS);
   }, 30_000);
 }
 
