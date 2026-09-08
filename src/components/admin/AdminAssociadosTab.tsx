@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Associado, Registro, Lote, StatusFiliacao } from '../../domain/types.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { StatusDocumentos, documentosEsperados } from '../../lib/documentos/index.js';
+import { formatCurrencyBRL } from '../../lib/money/index.js';
 import {
   Users,
   UserCheck,
@@ -20,7 +21,32 @@ import {
   ShieldCheck,
   Calendar,
   MapPin,
+  Trophy,
+  Award,
 } from 'lucide-react';
+
+type Tier = 'vip' | 'platinum' | 'prata' | 'bronze' | 'novo';
+
+const TIER_CONFIG: Record<Tier, { label: string; classes: string }> = {
+  vip: { label: 'VIP', classes: 'bg-purple-50 text-purple-700 border-purple-200' },
+  platinum: { label: 'Platinum', classes: 'bg-slate-800 text-slate-100 border-slate-700' },
+  prata: { label: 'Prata', classes: 'bg-slate-100 text-slate-600 border-slate-300' },
+  bronze: { label: 'Bronze', classes: 'bg-amber-50 text-amber-700 border-amber-300' },
+  novo: { label: 'Novo', classes: 'bg-sky-50 text-sky-600 border-sky-200' },
+};
+
+/** Tier calculado do valor pago acumulado do associado (soma do unit_price
+ * congelado nos registros pagos/protocolados/baixados dele) — dado real,
+ * não estimado. Faixas em centavos. */
+function calcularTier(valorPagoCentavos: number, listasEnviadas: number): Tier {
+  if (listasEnviadas === 0) return 'novo';
+  if (valorPagoCentavos >= 50000) return 'vip'; // R$ 500+
+  if (valorPagoCentavos >= 20000) return 'platinum'; // R$ 200+
+  if (valorPagoCentavos >= 8000) return 'prata'; // R$ 80+
+  return 'bronze';
+}
+
+const MEDALHA = ['🥇', '🥈', '🥉'];
 
 interface AdminAssociadosTabProps {
   associados: Associado[];
@@ -156,6 +182,18 @@ export const AdminAssociadosTab: React.FC<AdminAssociadosTabProps> = ({ associad
 
   const registrosDoAssociado = (associadoId: string) => registros.filter((r) => r.associado_id === associadoId);
 
+  const PAGOS_OU_ALEM = ['pago', 'aguardando_protocolo', 'protocolado', 'baixado', 'recusado'];
+  const valorPagoDoAssociado = (associadoId: string) =>
+    registrosDoAssociado(associadoId)
+      .filter((r) => PAGOS_OU_ALEM.includes(r.process_status))
+      .reduce((acc, r) => acc + r.unit_price, 0);
+
+  const rankingAssociados = [...associados]
+    .map((a) => ({ associado: a, valor: valorPagoDoAssociado(a.id), listas: registrosDoAssociado(a.id).length }))
+    .filter((x) => x.listas > 0)
+    .sort((a, b) => b.valor - a.valor)
+    .slice(0, 5);
+
   // ==========================================
   // PÁGINA DETALHADA DE UM ASSOCIADO
   // ==========================================
@@ -169,6 +207,8 @@ export const AdminAssociadosTab: React.FC<AdminAssociadosTabProps> = ({ associad
     const esperados = documentosEsperados(associado.tipo_documento);
     const registrosDele = registrosDoAssociado(associado.id);
     const statusCfg = STATUS_FILIACAO_LABEL[associado.status_filiacao];
+    const valorPagoAssociado = valorPagoDoAssociado(associado.id);
+    const tierAssociado = calcularTier(valorPagoAssociado, registrosDele.length);
 
     return (
       <div className="space-y-6">
@@ -194,8 +234,13 @@ export const AdminAssociadosTab: React.FC<AdminAssociadosTabProps> = ({ associad
                 <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
                   {associado.tipo_documento === 'cnpj' ? 'Pessoa Jurídica' : 'Pessoa Física'}
                 </span>
+                <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${TIER_CONFIG[tierAssociado].classes}`}>
+                  <Award className="w-2.5 h-2.5" />
+                  {TIER_CONFIG[tierAssociado].label}
+                </span>
               </div>
               <h2 className="text-lg font-bold text-slate-900 mt-1.5">{associado.nome}</h2>
+              <p className="text-xs text-slate-500 mt-0.5">{formatCurrencyBRL(valorPagoAssociado)} pagos em {registrosDele.length} lista(s)</p>
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -515,6 +560,42 @@ export const AdminAssociadosTab: React.FC<AdminAssociadosTabProps> = ({ associad
         </select>
       </div>
 
+      {/* Ranking de Associados por valor pago acumulado — define os tiers abaixo */}
+      {rankingAssociados.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-amber-500" />
+            <h3 className="text-sm font-bold text-slate-900">Ranking de Associados</h3>
+            <span className="text-[11px] text-slate-400 font-medium">por valor pago acumulado</span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {rankingAssociados.map((r, idx) => {
+              const tier = calcularTier(r.valor, r.listas);
+              return (
+                <button
+                  key={r.associado.id}
+                  type="button"
+                  onClick={() => setDetalhesId(r.associado.id)}
+                  className="w-full px-6 py-3 flex items-center justify-between gap-3 hover:bg-slate-50/80 cursor-pointer text-left"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-6 text-center text-sm shrink-0">{MEDALHA[idx] || idx + 1}</span>
+                    <span className="text-xs font-semibold text-slate-800 truncate">{r.associado.nome}</span>
+                    <span className={`shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${TIER_CONFIG[tier].classes}`}>
+                      {TIER_CONFIG[tier].label}
+                    </span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-bold text-slate-900">{formatCurrencyBRL(r.valor)}</p>
+                    <p className="text-[10px] text-slate-500">{r.listas} lista(s)</p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <p className="text-xs text-slate-500">
         {filtered.length} de {associados.length} associado(s)
       </p>
@@ -524,49 +605,74 @@ export const AdminAssociadosTab: React.FC<AdminAssociadosTabProps> = ({ associad
           Nenhum associado encontrado.
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((a) => {
-            const statusCfg = STATUS_FILIACAO_LABEL[a.status_filiacao];
-            const totalRegistros = registrosDoAssociado(a.id).length;
+        <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead className="bg-slate-50 text-[10px] text-slate-500 uppercase tracking-wider font-bold border-b border-slate-200">
+                <tr>
+                  <th className="px-5 py-3">Associado</th>
+                  <th className="px-5 py-3">Status</th>
+                  <th className="px-5 py-3">Tier</th>
+                  <th className="px-5 py-3">Contato</th>
+                  <th className="px-5 py-3">Listas</th>
+                  <th className="px-5 py-3">Valor Pago</th>
+                  <th className="px-5 py-3 text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {filtered.map((a) => {
+                  const statusCfg = STATUS_FILIACAO_LABEL[a.status_filiacao];
+                  const totalRegistros = registrosDoAssociado(a.id).length;
+                  const valorPago = valorPagoDoAssociado(a.id);
+                  const tier = calcularTier(valorPago, totalRegistros);
 
-            return (
-              <div key={a.id} className="bg-white rounded-xl border border-slate-200 shadow-2xs p-4 flex flex-col gap-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-900 truncate">{a.nome}</p>
-                    <p className="text-[11px] font-mono text-slate-500 mt-0.5">{a.cpf_cnpj}</p>
-                  </div>
-                  <span
-                    className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${statusCfg.classes}`}
-                  >
-                    {statusCfg.label}
-                  </span>
-                </div>
-
-                <div className="space-y-1 text-[11px] text-slate-600">
-                  <p className="flex items-center gap-1.5 truncate">
-                    <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    {a.telefone_whatsapp || 'não informado'}
-                  </p>
-                  {a.email && (
-                    <p className="flex items-center gap-1.5 truncate">
-                      <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      {a.email}
-                    </p>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setDetalhesId(a.id)}
-                  className="mt-1 w-full pt-2.5 border-t border-slate-100 flex items-center justify-center gap-1.5 text-xs font-bold text-[#148296] hover:text-[#0f6b7c] cursor-pointer transition-colors"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  {`Detalhes (${totalRegistros} lista${totalRegistros === 1 ? '' : 's'})`}
-                </button>
-              </div>
-            );
-          })}
+                  return (
+                    <tr key={a.id} className="hover:bg-slate-50/80">
+                      <td className="px-5 py-3">
+                        <p className="font-bold text-slate-900">{a.nome}</p>
+                        <p className="text-[10px] font-mono text-slate-500">{a.cpf_cnpj}</p>
+                      </td>
+                      <td className="px-5 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${statusCfg.classes}`}>
+                          {statusCfg.label}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${TIER_CONFIG[tier].classes}`}>
+                          <Award className="w-2.5 h-2.5" />
+                          {TIER_CONFIG[tier].label}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3">
+                        <p className="flex items-center gap-1.5 text-[11px]">
+                          <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                          {a.telefone_whatsapp || 'não informado'}
+                        </p>
+                        {a.email && (
+                          <p className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
+                            <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                            {a.email}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 font-bold">{totalRegistros}</td>
+                      <td className="px-5 py-3 font-bold text-slate-900">{formatCurrencyBRL(valorPago)}</td>
+                      <td className="px-5 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => setDetalhesId(a.id)}
+                          className="px-3 py-1.5 text-xs font-bold text-[#148296] hover:underline cursor-pointer flex items-center gap-1 ml-auto"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Detalhes
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
