@@ -199,6 +199,19 @@ export const documentosAssociado = pgTable('documentos_associado', {
   enviadoEm: timestamp('enviado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })
 
+export const usuarios = pgTable('usuarios', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  nome: text('nome').notNull(),
+  email: text('email').notNull(),
+  senhaHash: text('senha_hash').notNull(),
+  role: text('role').notNull(),
+  parceiroId: text('parceiro_id'),
+  partnerCode: text('partner_code'),
+  ativo: boolean('ativo').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
 export const automacoesConfig = pgTable('automacoes_config', {
   chave: text('chave').primaryKey(),
   tenantId: text('tenant_id').notNull(),

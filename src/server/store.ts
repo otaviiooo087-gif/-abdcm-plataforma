@@ -39,6 +39,9 @@ import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/inde
 import { getStorageProvider, storageProviderConfigurado } from '../integrations/storage/index.js';
 import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integrations/whatsapp/index.js';
 import { getOcrProvider } from '../integrations/ocr/index.js';
+import { hashPassword, verifyPassword } from './auth/password.js';
+import { criarTokenSessao } from './auth/session.js';
+import { sessaoRealAtual } from './auth/context.js';
 
 export { ABDCM_TENANT_ID } from './mockData.js';
 export type { UserSession } from './mockData.js';
@@ -280,8 +283,13 @@ function novoId(prefixo: string): string {
 
 let activeUser: UserSession = SEED_USERS[0]!;
 
+/**
+ * Sessão real (cookie assinado, resolvida em authContext no server.ts) tem
+ * precedência sobre o `activeUser` de demonstração. Sem cookie válido (ou
+ * pra quem ainda não tem conta real), cai no comportamento de sempre.
+ */
 function getSession(): UserSession {
-  return activeUser;
+  return sessaoRealAtual() ?? activeUser;
 }
 
 function setRole(role: UserRole): UserSession {
@@ -294,6 +302,109 @@ function setRole(role: UserRole): UserSession {
   };
   activeUser = user;
   return user;
+}
+
+// ---------------------------------------------------------------------
+// Login real (parceiro e administrador) — contas com senha, tabela
+// `usuarios`. Os outros 4 papéis continuam só na troca de papel acima.
+// ---------------------------------------------------------------------
+
+type UsuarioRow = typeof schema.usuarios.$inferSelect;
+
+function usuarioParaSessao(u: UsuarioRow): UserSession {
+  return {
+    id: u.id,
+    tenant_id: u.tenantId,
+    nome: u.nome,
+    email: u.email,
+    role: u.role as UserRole,
+    parceiro_id: u.parceiroId ?? undefined,
+    partner_code: u.partnerCode ?? undefined,
+    autenticado: true,
+  };
+}
+
+async function buscarUsuarioPorId(id: string): Promise<UserSession | null> {
+  const [row] = await db().select().from(schema.usuarios).where(eq(schema.usuarios.id, id)).limit(1);
+  if (!row || !row.ativo) return null;
+  return usuarioParaSessao(row);
+}
+
+async function autenticarUsuario(
+  email: string,
+  senha: string,
+): Promise<{ sessao: UserSession; token: string } | { erro: string }> {
+  const emailNormalizado = email.trim().toLowerCase();
+  if (!emailNormalizado || !senha) return { erro: 'E-mail e senha são obrigatórios.' };
+
+  const linhas = await db().select().from(schema.usuarios).where(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID));
+  const row = linhas.find((u) => u.email.toLowerCase() === emailNormalizado);
+
+  // Mensagem genérica em qualquer caso de falha — não revela se o e-mail existe.
+  if (!row || !row.ativo || !verifyPassword(senha, row.senhaHash)) {
+    return { erro: 'E-mail ou senha inválidos.' };
+  }
+
+  const sessao = usuarioParaSessao(row);
+  const token = criarTokenSessao(row.id);
+  return { sessao, token };
+}
+
+async function registrarParceiro(input: {
+  nome: string;
+  email: string;
+  senha: string;
+}): Promise<{ sessao: UserSession; token: string } | { erro: string }> {
+  const nome = input.nome.trim();
+  const email = input.email.trim().toLowerCase();
+  const senha = input.senha;
+
+  if (!nome) return { erro: 'Informe o nome ou razão social.' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { erro: 'E-mail inválido.' };
+  if (senha.length < 8) return { erro: 'A senha precisa ter pelo menos 8 caracteres.' };
+
+  const existentes = await db().select().from(schema.usuarios).where(eq(schema.usuarios.tenantId, ABDCM_TENANT_ID));
+  if (existentes.some((u) => u.email.toLowerCase() === email)) {
+    return { erro: 'Já existe uma conta com este e-mail.' };
+  }
+
+  const id = novoId('usr-parceiro');
+  const parceiroId = novoId('parc');
+  const partnerCode = `PARC-${id.slice(-8).toUpperCase()}`;
+  const now = new Date().toISOString();
+
+  const [row] = await db()
+    .insert(schema.usuarios)
+    .values({
+      id,
+      tenantId: ABDCM_TENANT_ID,
+      nome,
+      email,
+      senhaHash: hashPassword(senha),
+      role: 'parceiro',
+      parceiroId,
+      partnerCode,
+      ativo: true,
+      createdAt: now,
+    })
+    .returning();
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: ABDCM_TENANT_ID,
+    atorUserId: id,
+    acao: 'PARCEIRO_CADASTRADO',
+    entidadeTipo: 'usuarios',
+    entidadeId: id,
+    depois: { nome, email, parceiro_id: parceiroId },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Cadastro-Parceiro',
+    ocorridoEm: now,
+  });
+
+  const sessao = usuarioParaSessao(row!);
+  const token = criarTokenSessao(row!.id);
+  return { sessao, token };
 }
 
 // ---------------------------------------------------------------------
@@ -2095,6 +2206,9 @@ async function encerrarLote(loteId: string, atorUserId: string): Promise<Resulta
 export const serverStore = {
   getSession,
   setRole,
+  buscarUsuarioPorId,
+  autenticarUsuario,
+  registrarParceiro,
   getLotes,
   getAssociados,
   getRegistros,

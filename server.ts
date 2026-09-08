@@ -8,6 +8,8 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { serverStore } from './src/server/store';
+import { authContext } from './src/server/auth/context';
+import { SESSION_COOKIE_NAME, verificarTokenSessao } from './src/server/auth/session';
 import { cleanDocument } from './src/lib/masking/documentMasker';
 import { avisarStatusProcesso, rodarAutomacoes } from './src/server/notificacoes';
 import { pixProviderConfigurado } from './src/integrations/pix/index';
@@ -16,6 +18,31 @@ import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integratio
 import { ocrProviderConfigurado } from './src/integrations/ocr/index';
 import type { Registro } from './src/domain/types';
 import { promises as fs } from 'node:fs';
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) out[k] = decodeURIComponent(v);
+  }
+  return out;
+}
+
+const SESSION_COOKIE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias, igual ao TTL do token
+
+function definirCookieSessao(res: Response, token: string): void {
+  res.cookie(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: SESSION_COOKIE_MAX_AGE_MS,
+    path: '/',
+  });
+}
 
 /** Dispara avisos de status por WhatsApp sem segurar a resposta HTTP — falha vira só um log. */
 function dispararAvisosDeStatus(registros: Registro[], novoStatus: string): void {
@@ -39,6 +66,28 @@ async function startServer() {
   // Limite elevado por causa do upload do contrato-modelo em base64 (padrão do
   // Express é 100kb, pequeno demais até pra um PDF simples de poucas páginas).
   app.use(express.json({ limit: '15mb' }));
+
+  // Sessão real (parceiro/administrador) via cookie assinado — disponível
+  // pro resto da request via AsyncLocalStorage (src/server/auth/context.ts),
+  // sem precisar passar `req` por toda a cadeia do store. Sem cookie válido,
+  // authContext fica null e serverStore.getSession() cai no seletor de
+  // papel de demonstração, exatamente como antes desta funcionalidade.
+  app.use((req: Request, _res: Response, next) => {
+    const cookies = parseCookies(req.headers.cookie);
+    const token = cookies[SESSION_COOKIE_NAME];
+    const verificado = verificarTokenSessao(token);
+    if (!verificado) {
+      authContext.run(null, next);
+      return;
+    }
+    serverStore
+      .buscarUsuarioPorId(verificado.uid)
+      .then((sessaoReal) => authContext.run(sessaoReal, next))
+      .catch((err) => {
+        console.error('[auth] falha ao resolver sessão real:', err);
+        authContext.run(null, next);
+      });
+  });
 
   // Rotas de armazenamento mock (só existem quando não há R2 configurado —
   // ver src/integrations/storage). Simulam PUT/GET assinado guardando em
@@ -86,6 +135,55 @@ async function startServer() {
     }
     const session = serverStore.setRole(role);
     res.json(session);
+  });
+
+  // 1.1 Login real (parceiro e administrador) — os outros 4 papéis continuam
+  // só na troca de papel de demonstração acima.
+  app.post('/api/auth/login', async (req: Request, res: Response) => {
+    try {
+      const { email, senha } = req.body ?? {};
+      if (typeof email !== 'string' || typeof senha !== 'string') {
+        res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
+        return;
+      }
+      const resultado = await serverStore.autenticarUsuario(email, senha);
+      if ('erro' in resultado) {
+        res.status(401).json({ error: resultado.erro });
+        return;
+      }
+      definirCookieSessao(res, resultado.token);
+      res.json(resultado.sessao);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao entrar.';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 1.2 Cadastro de parceiro (self-service). Contas de administrador não têm
+  // cadastro aberto — são provisionadas por quem já administra o tenant.
+  app.post('/api/auth/register', async (req: Request, res: Response) => {
+    try {
+      const { nome, email, senha } = req.body ?? {};
+      if (typeof nome !== 'string' || typeof email !== 'string' || typeof senha !== 'string') {
+        res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
+        return;
+      }
+      const resultado = await serverStore.registrarParceiro({ nome, email, senha });
+      if ('erro' in resultado) {
+        res.status(400).json({ error: resultado.erro });
+        return;
+      }
+      definirCookieSessao(res, resultado.token);
+      res.status(201).json(resultado.sessao);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao cadastrar.';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post('/api/auth/logout', (_req: Request, res: Response) => {
+    res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+    res.json({ success: true });
   });
 
   // 2. Lotes

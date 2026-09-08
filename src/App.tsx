@@ -11,8 +11,11 @@ import { AdminConsole } from './components/AdminConsole.js';
 import { ConsultaPublica } from './components/ConsultaPublica.js';
 import { TimelineModal } from './components/TimelineModal.js';
 import { TransitionModal } from './components/TransitionModal.js';
+import { LoginPage } from './components/LoginPage.js';
 import { Lote, Registro, Associado, Submissao, AuditLog, UserRole } from './domain/types.js';
 import { UserSession } from './server/mockData.js';
+
+const DEMO_MODE_KEY = 'abdcm_modo_demonstracao';
 
 export default function App() {
   const [currentSurface, setCurrentSurface] = useState<'parceiro' | 'admin' | 'publico'>('parceiro');
@@ -21,6 +24,10 @@ export default function App() {
     'dashboard' | 'processos' | 'associados' | 'financeiro' | 'servicos' | 'automacoes' | 'config' | 'controle'
   >('dashboard');
   const [session, setSession] = useState<UserSession | null>(null);
+  const [demoModeChosen, setDemoModeChosen] = useState<boolean>(
+    () => sessionStorage.getItem(DEMO_MODE_KEY) === '1',
+  );
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const [lotes, setLotes] = useState<Lote[]>([]);
   const [registros, setRegistros] = useState<Registro[]>([]);
   const [associados, setAssociados] = useState<Associado[]>([]);
@@ -36,7 +43,8 @@ export default function App() {
     fetch('/api/auth/session')
       .then((res) => res.json())
       .then((data) => setSession(data))
-      .catch((err) => console.error('Erro ao carregar sessão:', err));
+      .catch((err) => console.error('Erro ao carregar sessão:', err))
+      .finally(() => setSessionLoaded(true));
 
     fetch('/api/lotes')
       .then((res) => res.json())
@@ -83,6 +91,29 @@ export default function App() {
     }
   };
 
+  const handleAuthenticated = (novaSessao: UserSession) => {
+    setSession(novaSessao);
+    loadData();
+  };
+
+  const handleEntrarModoDemonstracao = async (role: UserRole) => {
+    await handleSwitchRole(role);
+    sessionStorage.setItem(DEMO_MODE_KEY, '1');
+    setDemoModeChosen(true);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('Erro ao sair:', err);
+    }
+    sessionStorage.removeItem(DEMO_MODE_KEY);
+    setDemoModeChosen(false);
+    setSession(null);
+    loadData();
+  };
+
   // A troca de superfície (Portal do Parceiro / Console Admin / Consulta
   // Pública) é só navegação de tela — não muda o papel da sessão sozinha.
   // Sem isso, entrar no Console Admin com o papel ainda em "parceiro" (o
@@ -108,6 +139,22 @@ export default function App() {
     );
   });
 
+  // Gate de acesso: sem sessão real (login) nem modo demonstração escolhido,
+  // mostra a tela de login/cadastro em vez do app. Enquanto a primeira
+  // checagem de sessão não voltou, não renderiza nada pra evitar flash da
+  // tela de login antes de saber se já existe um cookie válido.
+  if (!sessionLoaded) {
+    return <div className="min-h-screen w-full bg-[#F8FAFC]" />;
+  }
+  if (!session?.autenticado && !demoModeChosen) {
+    return (
+      <LoginPage
+        onAuthenticated={handleAuthenticated}
+        onEntrarModoDemonstracao={handleEntrarModoDemonstracao}
+      />
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen bg-[#F8FAFC] font-sans text-[#1E293B] overflow-hidden">
       {/* 1. Sidebar com Tema Professional Polish */}
@@ -128,6 +175,7 @@ export default function App() {
           onSwitchSurface={handleSelectSurface}
           session={session}
           onSwitchRole={handleSwitchRole}
+          onLogout={handleLogout}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />
