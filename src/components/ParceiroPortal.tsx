@@ -35,6 +35,7 @@ import {
   Radio,
   Newspaper,
   ExternalLink,
+  Eye,
 } from 'lucide-react';
 import { CadastrarNomeModal } from './partner/CadastrarNomeModal.js';
 import { ImportarListaModal } from './partner/ImportarListaModal.js';
@@ -273,6 +274,29 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
   const handleClickAnexarComprovante = (subId: string) => {
     setComprovanteTargetId(subId);
     comprovanteInputRef.current?.click();
+  };
+
+  const [carregandoComprovanteId, setCarregandoComprovanteId] = useState<string | null>(null);
+
+  const handleVerComprovante = async (subId: string) => {
+    setCarregandoComprovanteId(subId);
+    try {
+      const res = await fetch(`/api/submissoes/${subId}/comprovante`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao carregar comprovante');
+      const janela = window.open();
+      if (janela) {
+        janela.document.write(
+          data.mimeType?.startsWith('image/')
+            ? `<img src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="max-width:100%" />`
+            : `<embed src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="width:100%;height:100vh" />`,
+        );
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao carregar comprovante');
+    } finally {
+      setCarregandoComprovanteId(null);
+    }
   };
 
   const handleComprovanteSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -816,6 +840,17 @@ export const ParceiroPortal: React.FC<ParceiroPortalProps> = ({
                         <td className="px-6 py-3">{statusBadge(sub.payment_status)}</td>
                         <td className="px-6 py-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            {sub.tem_comprovante && (
+                              <button
+                                type="button"
+                                disabled={carregandoComprovanteId === sub.id}
+                                onClick={() => handleVerComprovante(sub.id)}
+                                className="px-3 py-1 text-xs font-bold text-slate-600 hover:text-[#148296] hover:underline cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                {carregandoComprovanteId === sub.id ? 'Abrindo...' : 'Ver'}
+                              </button>
+                            )}
                             {sub.payment_status === 'reprovado' && (
                               <button
                                 type="button"

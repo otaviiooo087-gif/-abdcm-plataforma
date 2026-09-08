@@ -855,6 +855,21 @@ async function attachComprovante(
   });
 }
 
+/** Comprovante de pagamento de uma submissão — só quem pode ver a
+ * submissão (o próprio parceiro dono, ou a equipe ABDCM) chega até aqui;
+ * a checagem de quem pode chamar isto é feita na rota (server.ts). */
+async function getComprovante(
+  submissaoId: string,
+): Promise<{ parceiroId: string; comprovanteBase64: string; mimeType: string } | null> {
+  const [sub] = await db().select().from(schema.submissoes).where(eq(schema.submissoes.id, submissaoId));
+  if (!sub || !sub.comprovanteBase64) return null;
+  return {
+    parceiroId: sub.parceiroId,
+    comprovanteBase64: sub.comprovanteBase64,
+    mimeType: sub.comprovanteMime || 'application/octet-stream',
+  };
+}
+
 /** Cancela submissão pendente e libera os registros de volta para "pendente". */
 async function cancelSubmissao(
   submissaoId: string,
@@ -2386,6 +2401,7 @@ export const serverStore = {
   getContratos,
   addContrato,
   deleteContrato,
+  getComprovante,
   getEventosNoticias,
   createEventoNoticia,
   updateEventoNoticia,

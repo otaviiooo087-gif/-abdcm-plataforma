@@ -97,6 +97,29 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
     });
   }, [submissoes, statusFilter, searchTerm]);
 
+  const [carregandoComprovanteId, setCarregandoComprovanteId] = useState<string | null>(null);
+
+  const handleVerComprovante = async (subId: string) => {
+    setCarregandoComprovanteId(subId);
+    try {
+      const res = await fetch(`/api/submissoes/${subId}/comprovante`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao carregar comprovante');
+      const janela = window.open();
+      if (janela) {
+        janela.document.write(
+          data.mimeType?.startsWith('image/')
+            ? `<img src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="max-width:100%" />`
+            : `<embed src="data:${data.mimeType};base64,${data.comprovanteBase64}" style="width:100%;height:100vh" />`,
+        );
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Erro ao carregar comprovante');
+    } finally {
+      setCarregandoComprovanteId(null);
+    }
+  };
+
   // Aprovar Submissão / Conciliação
   const handleAprovar = async (subId: string) => {
     setIsProcessing(true);
@@ -480,11 +503,25 @@ export const AdminFinanceiroTab: React.FC<AdminFinanceiroTabProps> = ({
                     </span>
                   </div>
 
-                  {/* Card que simula o comprovante bancário recebido */}
+                  {/* Resumo da submissão — os campos abaixo são os dados reais da
+                      submissão; o comprovante em si (a imagem/PDF que o parceiro
+                      anexou) é aberto pelo botão "Ver Comprovante Anexado". */}
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs space-y-3 font-mono">
                     <div className="flex items-center justify-between pb-2 border-b border-slate-200 text-[11px] font-sans">
-                      <span className="font-bold text-slate-700">COMPROVANTE DE TRANSAÇÃO PIX / TED</span>
-                      <span className="text-slate-500">Autenticação: 8F2A.3391.EE40</span>
+                      <span className="font-bold text-slate-700">RESUMO DA SUBMISSÃO</span>
+                      {selectedSubmissao.tem_comprovante ? (
+                        <button
+                          type="button"
+                          disabled={carregandoComprovanteId === selectedSubmissao.id}
+                          onClick={() => handleVerComprovante(selectedSubmissao.id)}
+                          className="text-[#148296] font-bold hover:underline cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          {carregandoComprovanteId === selectedSubmissao.id ? 'Abrindo...' : 'Ver Comprovante Anexado'}
+                        </button>
+                      ) : (
+                        <span className="text-slate-400">Nenhum comprovante anexado</span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-[11px]">

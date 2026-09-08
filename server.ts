@@ -479,6 +479,27 @@ async function startServer() {
     }
   });
 
+  // 4.6.4 Ver Comprovante — o parceiro só vê o próprio; a equipe ABDCM vê qualquer um.
+  app.get('/api/submissoes/:id/comprovante', async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const session = serverStore.getSession();
+      const comprovante = await serverStore.getComprovante(id);
+      if (!comprovante) {
+        res.status(404).json({ error: 'Nenhum comprovante anexado nesta submissão.' });
+        return;
+      }
+      if (session.role === 'parceiro' && session.parceiro_id !== comprovante.parceiroId) {
+        res.status(403).json({ error: 'Você só pode ver comprovantes das suas próprias submissões.' });
+        return;
+      }
+      res.json({ comprovanteBase64: comprovante.comprovanteBase64, mimeType: comprovante.mimeType });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao buscar comprovante';
+      res.status(400).json({ error: msg });
+    }
+  });
+
   // 4.7 Cancelar Submissão Pendente
   app.delete('/api/submissoes/:id', async (req: Request, res: Response) => {
     try {
