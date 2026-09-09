@@ -996,6 +996,31 @@ async function startServer() {
     }
   });
 
+  // 6.5.1 Webhook do provedor de monitoramento processual (JUDIT) — avisa
+  // quando o processo de algum lote monitorado tem movimentação nova.
+  app.post('/api/webhooks/monitoramento-processo', async (req: Request, res: Response) => {
+    try {
+      const result = await serverStore.processarWebhookMonitoramentoProcesso(
+        req.body,
+        req.headers as Record<string, string | string[] | undefined>,
+      );
+      res.json({ success: true, processado: Boolean(result), novas_movimentacoes: result?.novasMovimentacoes ?? 0 });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao processar webhook de monitoramento';
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // 6.5.2 Movimentações do processo de um lote — timeline, admin only.
+  app.get('/api/lotes/:id/movimentacoes', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role === 'parceiro') {
+      res.status(403).json({ error: 'Apenas a equipe ABDCM acompanha movimentações do processo.' });
+      return;
+    }
+    res.json(await serverStore.getMovimentacoesProcesso(req.params.id));
+  });
+
   // 6.6 Status das integrações (Configurações > APIs) — nunca expõe a chave, só se está configurada.
   // 6.4.1 Controle de Acesso — lista de contas reais e ativar/desativar
   app.get('/api/admin/usuarios', async (_req: Request, res: Response) => {
@@ -1508,6 +1533,16 @@ async function startServer() {
   setInterval(() => {
     serverStore.reconciliarPixPendentes().catch((err) => console.error('[reconciliacao-pix] falha na rodada:', err));
   }, INTERVALO_RECONCILIACAO_PIX_MS);
+
+  // Reconciliação do monitoramento processual — bem mais espaçada que a de
+  // PIX: andamento de processo judicial não muda a cada segundo, e é só
+  // reforço pro webhook (ver reconciliarMonitoramentoPendente em store.ts).
+  const INTERVALO_RECONCILIACAO_MONITORAMENTO_MS = 30 * 60 * 1000; // 30 minutos
+  setInterval(() => {
+    serverStore
+      .reconciliarMonitoramentoPendente()
+      .catch((err) => console.error('[reconciliacao-monitoramento] falha na rodada:', err));
+  }, INTERVALO_RECONCILIACAO_MONITORAMENTO_MS);
 }
 
 startServer();
