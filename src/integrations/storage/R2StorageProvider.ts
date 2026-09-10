@@ -1,6 +1,7 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { StorageProvider, CriarUrlUploadInput, UrlUpload } from './StorageProvider.js';
+import { valorCredencial } from '../credencialResolver.js';
 
 // Cloudflare R2 — compatível com a API do S3, então usa o SDK oficial da
 // AWS apontando pro endpoint do R2. Implementado a partir da documentação
@@ -11,9 +12,9 @@ import type { StorageProvider, CriarUrlUploadInput, UrlUpload } from './StorageP
 // Env vars: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME.
 
 function cliente(): S3Client {
-  const accountId = process.env.R2_ACCOUNT_ID;
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const accountId = valorCredencial('storage_r2', 'R2_ACCOUNT_ID');
+  const accessKeyId = valorCredencial('storage_r2', 'R2_ACCESS_KEY_ID');
+  const secretAccessKey = valorCredencial('storage_r2', 'R2_SECRET_ACCESS_KEY');
   if (!accountId || !accessKeyId || !secretAccessKey) {
     throw new Error('Credenciais do R2 ausentes (R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY).');
   }
@@ -25,7 +26,7 @@ function cliente(): S3Client {
 }
 
 function bucket(): string {
-  const nome = process.env.R2_BUCKET_NAME;
+  const nome = valorCredencial('storage_r2', 'R2_BUCKET_NAME');
   if (!nome) throw new Error('R2_BUCKET_NAME ausente.');
   return nome;
 }

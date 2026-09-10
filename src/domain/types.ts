@@ -135,6 +135,46 @@ export interface MovimentacaoProcesso {
   criado_em: string;
 }
 
+// Status de uma credencial de integração configurada pelo admin (banco,
+// criptografado) — nunca carrega o valor real da chave, só metadados pra
+// tela de Configurações. Ver src/integrations/credenciaisCatalogo.ts pro
+// catálogo de provedores e campos esperados.
+export interface CredencialIntegracaoStatus {
+  provider: string;
+  nome: string;
+  categoria: string;
+  campos: { chave: string; rotulo: string; obrigatorio: boolean }[];
+  origem: 'banco' | 'ambiente' | 'nenhum';
+  configurado: boolean;
+  atualizadoEm?: string | null;
+  atualizadoPor?: string | null;
+  custoUnitarioCentavos?: number | null;
+  unidadeCusto?: string | null;
+}
+
+// Uma chamada paga a uma API externa, pro dashboard de gasto por
+// integração. custo_centavos sempre inteiro (I4/dinheiro em centavos) — 0
+// quando o custo unitário ainda não foi configurado pelo admin (nunca
+// fabricado).
+export interface ApiUso {
+  id: string;
+  tenant_id: string;
+  provider: string;
+  operacao: string;
+  custo_centavos: number;
+  referencia_id?: string | null;
+  criado_em: string;
+}
+
+export interface GastoApiPorProvider {
+  provider: string;
+  nome: string;
+  chamadas: number;
+  custo_total_centavos: number;
+  custo_unitario_centavos: number | null;
+  unidade_custo: string | null;
+}
+
 // Associado
 export interface Associado {
   id: string;

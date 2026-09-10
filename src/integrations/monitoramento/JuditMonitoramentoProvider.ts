@@ -5,6 +5,7 @@ import type {
   MovimentacaoEncontrada,
   AtualizacaoMonitoramento,
 } from './MonitoramentoProvider.js';
+import { valorCredencial } from '../credencialResolver.js';
 
 // Integração real com a API da JUDIT (https://judit.io — monitoramento
 // processual, docs.judit.io).
@@ -29,7 +30,7 @@ const REQUESTS_BASE_URL = 'https://requests.prod.judit.io';
 const TRACKING_BASE_URL = 'https://tracking.prod.judit.io';
 
 async function juditFetch<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
-  const apiKey = process.env.JUDIT_API_KEY;
+  const apiKey = valorCredencial('monitoramento_judit', 'JUDIT_API_KEY');
   if (!apiKey) throw new Error('JUDIT_API_KEY ausente — configure a variável de ambiente.');
 
   const res = await fetch(`${baseUrl}${path}`, {
@@ -119,7 +120,7 @@ export class JuditMonitoramentoProvider implements MonitoramentoProvider {
     // query string/header (ajustar conforme a doc real assim que
     // disponível); sem isso configurado, aceita qualquer payload — mesma
     // postura condicional do AsaasPixProvider.
-    const tokenEsperado = process.env.JUDIT_WEBHOOK_TOKEN;
+    const tokenEsperado = valorCredencial('monitoramento_judit', 'JUDIT_WEBHOOK_TOKEN');
     if (tokenEsperado) {
       const tokenRecebido = headers['x-judit-webhook-token'];
       if (tokenRecebido !== tokenEsperado) {

@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type { OcrProvider, DocumentoLido, DocumentoLidoInput } from './OcrProvider.js';
+import { valorCredencial } from '../credencialResolver.js';
 
 // CNH costuma vir em PDF (baixada do app do Detran/Serpro), RG geralmente em
 // foto — os dois formatos precisam funcionar sem o parceiro converter nada.
@@ -40,7 +41,7 @@ export class ClaudeOcrProvider implements OcrProvider {
   private client: Anthropic;
 
   constructor() {
-    this.client = new Anthropic();
+    this.client = new Anthropic({ apiKey: valorCredencial('ocr_claude', 'ANTHROPIC_API_KEY') });
   }
 
   async lerDocumento(input: DocumentoLidoInput): Promise<DocumentoLido> {

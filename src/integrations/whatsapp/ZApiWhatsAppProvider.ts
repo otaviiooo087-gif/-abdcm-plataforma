@@ -1,4 +1,5 @@
 import type { WhatsAppProvider, EnviarTextoInput, EnvioResultado, MensagemRecebida } from './WhatsAppProvider.js';
+import { valorCredencial } from '../credencialResolver.js';
 
 // Integração real com a Z-API (https://developer.z-api.io) — API
 // não-oficial de WhatsApp, escolhida por não depender de homologação da
@@ -12,8 +13,8 @@ import type { WhatsAppProvider, EnviarTextoInput, EnvioResultado, MensagemRecebi
 // Env vars: ZAPI_INSTANCE_ID, ZAPI_TOKEN, ZAPI_CLIENT_TOKEN.
 
 function baseUrl(): string {
-  const instancia = process.env.ZAPI_INSTANCE_ID;
-  const token = process.env.ZAPI_TOKEN;
+  const instancia = valorCredencial('whatsapp_zapi', 'ZAPI_INSTANCE_ID');
+  const token = valorCredencial('whatsapp_zapi', 'ZAPI_TOKEN');
   if (!instancia || !token) {
     throw new Error('ZAPI_INSTANCE_ID/ZAPI_TOKEN ausentes — configure as variáveis de ambiente.');
   }
