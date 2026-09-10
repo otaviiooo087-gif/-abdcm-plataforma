@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Lote, Registro, RegistroOrgaoStatus, ORGAOS_BUREAU } from '../../domain/types.js';
+import { Lote, Registro, RegistroOrgaoStatus, ORGAOS_BUREAU, MovimentacaoProcesso } from '../../domain/types.js';
 import { StatusBadge } from '../StatusBadge.js';
 import { formatCurrencyBRL } from '../../lib/money/index.js';
 import { UserSession } from '../../server/mockData.js';
@@ -99,6 +99,8 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
   const [documentosStatus, setDocumentosStatus] = useState<Record<string, StatusDocumentos>>({});
   const [docsAbertoParaRegistro, setDocsAbertoParaRegistro] = useState<string | null>(null);
   const [baixandoDoc, setBaixandoDoc] = useState<string | null>(null);
+  const [movimentacoesProcesso, setMovimentacoesProcesso] = useState<MovimentacaoProcesso[]>([]);
+  const [carregandoMovimentacoes, setCarregandoMovimentacoes] = useState(false);
 
   useEffect(() => {
     fetch('/api/documentos/status')
@@ -110,6 +112,23 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
       .then(setStatusOrgaos)
       .catch(() => setStatusOrgaos({}));
   }, []);
+
+  // Movimentações do processo (monitoramento automático via API) — busca de
+  // novo sempre que o lote selecionado muda, e o poll global de 20s/SSE em
+  // App.tsx já recarrega os lotes quando o servidor avisa que algo mudou;
+  // aqui é só re-buscar as movimentações desse lote específico junto.
+  useEffect(() => {
+    if (!selectedLoteId || selectedLoteId === 'todos') {
+      setMovimentacoesProcesso([]);
+      return;
+    }
+    setCarregandoMovimentacoes(true);
+    fetch(`/api/lotes/${selectedLoteId}/movimentacoes`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then(setMovimentacoesProcesso)
+      .catch(() => setMovimentacoesProcesso([]))
+      .finally(() => setCarregandoMovimentacoes(false));
+  }, [selectedLoteId]);
 
   /** Órgão baixado no nível do lote = baixado pra todos os registros
    * protocolados dele — mesma lógica do popup do parceiro (NomesDaListaModal). */
@@ -1016,6 +1035,57 @@ export const AdminProcessosTab: React.FC<AdminProcessosTabProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Movimentações do processo — monitoramento automático via API
+              (JUDIT). Sem número de processo, não tem o que monitorar; com
+              número mas sem judit_tracking_id, o monitoramento ainda não
+              abriu (provedor em modo mock, ou falhou em silêncio — ver log
+              do servidor). */}
+          {currentLote.numero_processo && (
+            <div className="mt-4 pt-4 border-t border-slate-700">
+              <div className="flex items-center justify-between mb-2.5">
+                <p className="text-[11px] font-bold text-slate-300 uppercase tracking-wide flex items-center gap-1.5">
+                  <Gavel className="w-3.5 h-3.5 text-[#148296]" />
+                  Movimentações do Processo
+                </p>
+                <span
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    currentLote.judit_tracking_id
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                      : 'bg-slate-700 text-slate-400 border border-slate-600'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${currentLote.judit_tracking_id ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`}
+                  />
+                  {currentLote.judit_tracking_id ? 'Monitorado automaticamente' : 'Monitoramento não ativo'}
+                </span>
+              </div>
+
+              {carregandoMovimentacoes ? (
+                <p className="text-[11px] text-slate-500">Carregando...</p>
+              ) : movimentacoesProcesso.length === 0 ? (
+                <p className="text-[11px] text-slate-500">
+                  {currentLote.judit_tracking_id
+                    ? 'Nenhuma movimentação recebida ainda.'
+                    : 'Sem monitoramento ativo pra este processo — confira as credenciais do provedor em Configurações.'}
+                </p>
+              ) : (
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {movimentacoesProcesso.map((mov) => (
+                    <div key={mov.id} className="bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 text-xs">
+                      <p className="text-slate-200">{mov.descricao}</p>
+                      <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
+                        {mov.ocorrido_em && <span>{new Date(mov.ocorrido_em).toLocaleDateString('pt-BR')}</span>}
+                        {mov.fonte && <span>· {mov.fonte}</span>}
+                        <span className="ml-auto italic">{mov.origem === 'reconciliacao' ? 'reconciliação' : 'webhook'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Prazo vencido: captação continua "aberta" até o admin confirmar o
               encerramento — I3, ação em massa (bloqueia envios de todos os

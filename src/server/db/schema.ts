@@ -30,6 +30,7 @@ export const lotes = pgTable('lotes', {
   liminarStatus: text('liminar_status'),
   concluidoEm: timestamp('concluido_em', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+  juditTrackingId: text('judit_tracking_id'),
 })
 
 export const associados = pgTable('associados', {
@@ -348,4 +349,15 @@ export const automacoesConfig = pgTable('automacoes_config', {
   ativo: boolean('ativo').notNull().default(true),
   config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
   atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const processoMovimentacoes = pgTable('processo_movimentacoes', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  loteId: text('lote_id').notNull(),
+  descricao: text('descricao').notNull(),
+  ocorridoEm: timestamp('ocorrido_em', { withTimezone: true, mode: 'string' }),
+  fonte: text('fonte'),
+  origem: text('origem').notNull().default('webhook'),
+  criadoEm: timestamp('criado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })

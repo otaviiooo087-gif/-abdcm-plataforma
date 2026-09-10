@@ -114,6 +114,25 @@ export interface Lote {
   liminar_status?: string | null;
   concluido_em?: string | null;
   created_at: string;
+  /** Id do acompanhamento no provedor de monitoramento processual (JUDIT) —
+   * null enquanto o lote não tem numero_processo ou o monitoramento ainda
+   * não foi criado. */
+  judit_tracking_id?: string | null;
+}
+
+// Movimentação de processo, recebida do provedor de monitoramento (webhook
+// ou reconciliação periódica de reforço) — puro registro pra leitura
+// humana, nunca interpretado pelo sistema (liminar_status continua sendo
+// decisão manual do admin).
+export interface MovimentacaoProcesso {
+  id: string;
+  tenant_id: string;
+  lote_id: string;
+  descricao: string;
+  ocorrido_em?: string | null;
+  fonte?: string | null;
+  origem: 'webhook' | 'reconciliacao';
+  criado_em: string;
 }
 
 // Associado

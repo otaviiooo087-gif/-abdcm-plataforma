@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { db } from './db/client.js';
@@ -43,6 +43,7 @@ import type {
   MensagemExtra,
   ChamadaConfig,
   ChamadaLog,
+  MovimentacaoProcesso,
 } from '../domain/types.js';
 import { getLigacaoProvider } from '../integrations/ligacao/index.js';
 import { ORGAOS_BUREAU } from '../domain/types.js';
@@ -55,6 +56,7 @@ import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integration
 import { getOcrProvider } from '../integrations/ocr/index.js';
 import { gerarFichaAssociativaPdf } from '../domain/associados/ficha.js';
 import { emitirEvento } from './eventBus.js';
+import { getMonitoramentoProvider, monitoramentoProviderConfigurado } from '../integrations/monitoramento/index.js';
 import { hashPassword, verifyPassword } from './auth/password.js';
 import { criarTokenSessao } from './auth/session.js';
 import { sessaoRealAtual } from './auth/context.js';
@@ -104,6 +106,7 @@ function loteDeLinha(l: LoteRow): Lote {
     liminar_status: l.liminarStatus,
     concluido_em: l.concluidoEm,
     created_at: l.createdAt,
+    judit_tracking_id: l.juditTrackingId,
   };
 }
 
@@ -218,6 +221,19 @@ function contestacaoDeLinha(c: ContestacaoRow): Contestacao {
     aberta_em: c.abertaEm,
     sla_vence_em: c.slaVenceEm,
     resolvido_em: c.resolvidoEm,
+  };
+}
+
+function movimentacaoProcessoDeLinha(m: typeof schema.processoMovimentacoes.$inferSelect): MovimentacaoProcesso {
+  return {
+    id: m.id,
+    tenant_id: m.tenantId,
+    lote_id: m.loteId,
+    descricao: m.descricao,
+    ocorrido_em: m.ocorridoEm,
+    fonte: m.fonte,
+    origem: m.origem as MovimentacaoProcesso['origem'],
+    criado_em: m.criadoEm,
   };
 }
 
@@ -1923,6 +1939,13 @@ async function updateLote(
   });
 
   emitirEvento({ categoria: 'lotes' });
+  // Número do processo chegou ou mudou — (re)abre o monitoramento
+  // automático com o número certo. Sem await de propósito: não faz sentido
+  // segurar a resposta da edição do lote esperando uma chamada de rede pro
+  // provedor de monitoramento (mesmo raciocínio do PIX em submitBatch).
+  if (patch.numeroProcesso && patch.numeroProcesso !== atual.numeroProcesso) {
+    iniciarMonitoramentoProcesso(id).catch(() => {});
+  }
   return loteDeLinha({ ...atual, ...patch });
 }
 
@@ -1972,6 +1995,7 @@ async function createLote(
     liminarStatus: null,
     concluidoEm: null,
     createdAt: agora,
+    juditTrackingId: null,
   };
 
   await db().insert(schema.lotes).values(linha);
@@ -1991,7 +2015,143 @@ async function createLote(
   });
 
   emitirEvento({ categoria: 'lotes' });
+  if (linha.numeroProcesso) iniciarMonitoramentoProcesso(linha.id).catch(() => {});
   return loteDeLinha(linha);
+}
+
+// ---------------------------------------------------------------------
+// Monitoramento processual automático (via API real — ver
+// src/integrations/monitoramento). Abre um acompanhamento assim que o lote
+// ganha (ou troca) numero_processo; o provedor avisa por webhook quando o
+// processo se mexe, com uma reconciliação periódica de reforço (ver
+// server.ts) cobrindo webhook perdido/atrasado — mesma dupla estratégia já
+// usada pra PIX (webhook + reconciliarPixPendentes).
+// ---------------------------------------------------------------------
+
+/** Abre (ou reabre, se o número do processo mudou) o monitoramento
+ * automático de um lote junto ao provedor configurado. Melhor-esforço: uma
+ * falha aqui (provedor fora do ar, chave ausente, APP_PUBLIC_URL não
+ * configurado) nunca derruba a criação/edição do lote — só fica sem
+ * monitoramento até alguém corrigir e editar o numero_processo de novo,
+ * o que tenta abrir de novo. */
+async function iniciarMonitoramentoProcesso(loteId: string): Promise<void> {
+  const [lote] = await db().select().from(schema.lotes).where(eq(schema.lotes.id, loteId));
+  if (!lote || !lote.numeroProcesso) return;
+
+  // APP_PUBLIC_URL só é exigido com o provedor real configurado — o mock
+  // nem usa a callbackUrl (não fala com rede nenhuma), então precisa
+  // continuar funcionando sem nenhuma variável extra (CLAUDE.md seção 8).
+  const baseUrl = process.env.APP_PUBLIC_URL;
+  if (monitoramentoProviderConfigurado() && !baseUrl) {
+    console.warn(
+      `[monitoramento-processual] APP_PUBLIC_URL não configurado — pulando abertura de monitoramento pro lote ${loteId}.`,
+    );
+    return;
+  }
+
+  try {
+    const { trackingId } = await getMonitoramentoProvider().criarMonitoramento({
+      numeroProcesso: lote.numeroProcesso,
+      callbackUrl: baseUrl ? `${baseUrl.replace(/\/$/, '')}/api/webhooks/monitoramento-processo` : '',
+    });
+    await db().update(schema.lotes).set({ juditTrackingId: trackingId }).where(eq(schema.lotes.id, loteId));
+  } catch (err) {
+    console.error(`[monitoramento-processual] falha ao abrir monitoramento pro lote ${loteId}:`, err);
+  }
+}
+
+/** Grava só as movimentações realmente novas (dedup por descrição+data —
+ * webhook redisparado ou reconciliação encontrando o que o webhook já
+ * trouxe não duplica linha). Retorna quantas entraram. */
+async function registrarMovimentacoesProcesso(
+  loteId: string,
+  tenantId: string,
+  movimentacoes: { descricao: string; ocorridoEm: Date | null; fonte?: string | null }[],
+  origem: 'webhook' | 'reconciliacao',
+): Promise<number> {
+  if (movimentacoes.length === 0) return 0;
+
+  const existentes = await db()
+    .select({ descricao: schema.processoMovimentacoes.descricao, ocorridoEm: schema.processoMovimentacoes.ocorridoEm })
+    .from(schema.processoMovimentacoes)
+    .where(eq(schema.processoMovimentacoes.loteId, loteId));
+  const chavesExistentes = new Set(existentes.map((e) => `${e.descricao}|${e.ocorridoEm ?? ''}`));
+
+  const novas = movimentacoes.filter(
+    (m) => !chavesExistentes.has(`${m.descricao}|${m.ocorridoEm ? m.ocorridoEm.toISOString() : ''}`),
+  );
+  if (novas.length === 0) return 0;
+
+  const now = new Date().toISOString();
+  await db()
+    .insert(schema.processoMovimentacoes)
+    .values(
+      novas.map((m) => ({
+        id: novoId('movproc'),
+        tenantId,
+        loteId,
+        descricao: m.descricao,
+        ocorridoEm: m.ocorridoEm ? m.ocorridoEm.toISOString() : null,
+        fonte: m.fonte ?? null,
+        origem,
+        criadoEm: now,
+      })),
+    );
+  return novas.length;
+}
+
+/** Recebe o webhook do provedor de monitoramento, valida e grava as
+ * movimentações novas do lote correspondente (casado pelo tracking id).
+ * Webhook de um tracking que não corresponde a nenhum lote conhecido (ex.:
+ * monitoramento antigo, órfão) é ignorado, não é erro. */
+async function processarWebhookMonitoramentoProcesso(
+  payload: unknown,
+  headers: Record<string, string | string[] | undefined>,
+): Promise<{ loteId: string; novasMovimentacoes: number } | null> {
+  const atualizacao = await getMonitoramentoProvider().validarWebhook(payload, headers);
+
+  const [lote] = await db().select().from(schema.lotes).where(eq(schema.lotes.juditTrackingId, atualizacao.trackingId));
+  if (!lote) return null;
+
+  const novasMovimentacoes = await registrarMovimentacoesProcesso(lote.id, lote.tenantId, atualizacao.movimentacoes, 'webhook');
+  if (novasMovimentacoes > 0) emitirEvento({ categoria: 'lotes' });
+  return { loteId: lote.id, novasMovimentacoes };
+}
+
+export interface ResultadoReconciliacaoMonitoramento {
+  verificados: number;
+  novasMovimentacoes: number;
+}
+
+/** Consulta ativamente o provedor de monitoramento pra cada lote com
+ * acompanhamento aberto — cobre webhook perdido/atrasado. Roda num
+ * intervalo bem mais espaçado que a reconciliação de PIX (server.ts):
+ * andamento processual não muda a cada segundo. */
+async function reconciliarMonitoramentoPendente(): Promise<ResultadoReconciliacaoMonitoramento> {
+  const lotesMonitorados = await db().select().from(schema.lotes).where(isNotNull(schema.lotes.juditTrackingId));
+  const provider = getMonitoramentoProvider();
+  let novasMovimentacoes = 0;
+
+  for (const lote of lotesMonitorados) {
+    try {
+      const movimentacoes = await provider.consultarMovimentacoes(lote.juditTrackingId!);
+      novasMovimentacoes += await registrarMovimentacoesProcesso(lote.id, lote.tenantId, movimentacoes, 'reconciliacao');
+    } catch (err) {
+      console.error(`[reconciliarMonitoramentoPendente] falha ao consultar lote ${lote.id}:`, err);
+    }
+  }
+
+  if (novasMovimentacoes > 0) emitirEvento({ categoria: 'lotes' });
+  return { verificados: lotesMonitorados.length, novasMovimentacoes };
+}
+
+async function getMovimentacoesProcesso(loteId: string): Promise<MovimentacaoProcesso[]> {
+  const linhas = await db()
+    .select()
+    .from(schema.processoMovimentacoes)
+    .where(eq(schema.processoMovimentacoes.loteId, loteId))
+    .orderBy(desc(schema.processoMovimentacoes.criadoEm));
+  return linhas.map(movimentacaoProcessoDeLinha);
 }
 
 // ---------------------------------------------------------------------
@@ -3593,6 +3753,10 @@ export const serverStore = {
   attachComprovante,
   getContestacoes,
   createContestacao,
+  iniciarMonitoramentoProcesso,
+  processarWebhookMonitoramentoProcesso,
+  reconciliarMonitoramentoPendente,
+  getMovimentacoesProcesso,
   getServicos,
   createServico,
   dispararMarketingServico,
