@@ -14,6 +14,9 @@ import {
   Building2,
   Save,
   Scale,
+  ScanLine,
+  HardDrive,
+  Gavel,
 } from 'lucide-react';
 
 type ConfigSubTab = 'empresa' | 'geral' | 'apis';
@@ -35,6 +38,9 @@ const EMPTY_EMPRESA: Omit<ConfiguracaoEmpresa, 'tenant_id' | 'atualizado_em'> = 
 interface StatusIntegracoes {
   pix: { provider: string; configurado: boolean };
   whatsapp: { provider: string; configurado: boolean };
+  storage: { provider: string; configurado: boolean };
+  ocr: { provider: string; configurado: boolean };
+  monitoramento: { provider: string; configurado: boolean };
 }
 
 export const AdminConfiguracoesTab: React.FC = () => {
@@ -413,6 +419,95 @@ export const AdminConfiguracoesTab: React.FC = () => {
               </div>
             </div>
             {status?.whatsapp.configurado ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Conectado
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 shrink-0">
+                <XCircle className="w-3.5 h-3.5" />
+                Modo simulação
+              </span>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-[#148296]/10 text-[#148296] flex items-center justify-center shrink-0">
+                <UploadCloud className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-900">Armazenamento — Cloudflare R2</p>
+                <p className="text-[11px] text-slate-500">
+                  Guarda CNH/RG e fichas assinadas de verdade. Sem isto, os arquivos ficam só em
+                  disco local (não sobrevivem a um redeploy) — e a leitura automática de documentos
+                  (OCR) não funciona, porque a IA precisa de uma URL alcançável de fora pra ler o
+                  arquivo. Variáveis: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME.
+                </p>
+              </div>
+            </div>
+            {status?.storage.configurado ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Conectado
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 shrink-0">
+                <XCircle className="w-3.5 h-3.5" />
+                Modo simulação
+              </span>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-[#148296]/10 text-[#148296] flex items-center justify-center shrink-0">
+                <ScanLine className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-900">Leitura de Documentos (OCR) — Claude</p>
+                <p className="text-[11px] text-slate-500">
+                  Lê nome e CPF automaticamente de CNH/RG (anexo em massa e "Cadastrar por
+                  Documento"). Sem isto, todo documento cai pra preenchimento manual — de propósito,
+                  nunca falha silenciosamente. Exige Armazenamento real (acima) também. Variáveis:
+                  OCR_PROVIDER=real, ANTHROPIC_API_KEY.
+                </p>
+              </div>
+            </div>
+            {status?.ocr.configurado ? (
+              status?.storage.configurado ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Conectado
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 shrink-0">
+                  <XCircle className="w-3.5 h-3.5" />
+                  Falta o Armazenamento
+                </span>
+              )
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 shrink-0">
+                <XCircle className="w-3.5 h-3.5" />
+                Modo simulação
+              </span>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-2xs p-5 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-[#148296]/10 text-[#148296] flex items-center justify-center shrink-0">
+                <Gavel className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-slate-900">Monitoramento Processual — JUDIT</p>
+                <p className="text-[11px] text-slate-500">
+                  Acompanha o andamento do processo judicial de cada Ação Coletiva sozinho (aba
+                  Processos). Variáveis: MONITORAMENTO_PROVIDER=real, JUDIT_API_KEY, APP_PUBLIC_URL.
+                </p>
+              </div>
+            </div>
+            {status?.monitoramento.configurado ? (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 Conectado

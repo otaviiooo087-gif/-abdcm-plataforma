@@ -16,6 +16,7 @@ import { pixProviderConfigurado } from './src/integrations/pix/index';
 import { whatsAppProviderConfigurado } from './src/integrations/whatsapp/index';
 import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integrations/storage/index';
 import { ocrProviderConfigurado } from './src/integrations/ocr/index';
+import { monitoramentoProviderConfigurado } from './src/integrations/monitoramento/index';
 import type { Registro, OrgaoBureau } from './src/domain/types';
 import { promises as fs } from 'node:fs';
 import { onEvento, type EventoTempoReal } from './src/server/eventBus';
@@ -1064,6 +1065,7 @@ async function startServer() {
       whatsapp: { provider: 'z-api', configurado: whatsAppProviderConfigurado() },
       storage: { provider: 'r2', configurado: storageProviderConfigurado() },
       ocr: { provider: 'claude', configurado: ocrProviderConfigurado() },
+      monitoramento: { provider: 'judit', configurado: monitoramentoProviderConfigurado() },
     });
   });
 

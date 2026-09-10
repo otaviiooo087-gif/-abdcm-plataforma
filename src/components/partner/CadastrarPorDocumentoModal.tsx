@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, FileUp, Loader2, ShieldCheck, CheckCircle2, AlertCircle, RefreshCw, Download } from 'lucide-react';
 import { stageArquivo } from '../../lib/documentos/index.js';
 
@@ -31,7 +31,21 @@ export const CadastrarPorDocumentoModal: React.FC<CadastrarPorDocumentoModalProp
   const [assinaturaDetectada, setAssinaturaDetectada] = useState(false);
   const [associadoId, setAssociadoId] = useState<string | null>(null);
   const [baixandoFicha, setBaixandoFicha] = useState(false);
+  const [leituraAutomaticaAtiva, setLeituraAutomaticaAtiva] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sem OCR real configurado (ou sem Armazenamento real, que o OCR real
+  // também exige), a leitura automática nunca vem — é o comportamento
+  // padrão em modo simulação, não uma falha desta tentativa específica.
+  // Avisa isso de cara em vez de deixar parecer que a leitura "não
+  // funcionou" (ver Configurações > APIs no admin).
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/config/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setLeituraAutomaticaAtiva(Boolean(data?.ocr?.configurado && data?.storage?.configurado)))
+      .catch(() => setLeituraAutomaticaAtiva(true));
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -194,11 +208,18 @@ export const CadastrarPorDocumentoModal: React.FC<CadastrarPorDocumentoModalProp
                 <img src={previewUrl} alt="Documento enviado" className="w-full max-h-40 object-contain rounded-lg border border-slate-200 bg-slate-50" />
               )}
 
-              {confianca === 'baixa' && (
-                <div className="flex items-center gap-2 bg-amber-50 text-amber-700 p-2.5 rounded-lg border border-amber-200 text-[11px] font-semibold">
+              {!leituraAutomaticaAtiva ? (
+                <div className="flex items-center gap-2 bg-slate-100 text-slate-600 p-2.5 rounded-lg border border-slate-200 text-[11px] font-semibold">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  Confiança baixa na leitura — confira nome e CPF com atenção antes de confirmar.
+                  Leitura automática ainda não configurada nesta conta — preencha nome e CPF abaixo.
                 </div>
+              ) : (
+                confianca === 'baixa' && (
+                  <div className="flex items-center gap-2 bg-amber-50 text-amber-700 p-2.5 rounded-lg border border-amber-200 text-[11px] font-semibold">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    Confiança baixa na leitura — confira nome e CPF com atenção antes de confirmar.
+                  </div>
+                )
               )}
 
               <div>
