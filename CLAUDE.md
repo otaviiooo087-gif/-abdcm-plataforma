@@ -81,9 +81,20 @@ implemente e não proponha contorno.
 interface é single-tenant (ABDCM), sem seletor visível. É preparação para white-label, não feature
 de hoje.
 
-**I10 — Nenhum segredo no repositório.** Chaves de API, certificados e tokens exclusivamente por
-variável de ambiente. `.env.example` com as chaves vazias e comentadas. Nunca escreva um valor real
-de credencial em nenhum arquivo, nem em teste, nem em comentário, nem em exemplo.
+**I10 — Nenhum segredo no repositório.** Chaves de API, certificados e tokens nunca em texto puro
+em nenhum arquivo versionado — nem em código, nem em teste, nem em comentário, nem em exemplo.
+`.env.example` sempre com as chaves vazias e comentadas.
+
+Duas formas de configurar uma chave, as duas válidas: (a) variável de ambiente (deploy), sempre
+disponível pra toda integração; (b) tela **Admin > Configurações > APIs**, que grava a chave
+**criptografada** no banco (AES-256-GCM) e ativa a integração na hora, sem redeploy — pensada pra
+quem opera a associação poder plugar/trocar uma chave sozinho. A chave mestra de criptografia
+(`CREDENCIAIS_ENCRYPTION_KEY`) continua exclusivamente por variável de ambiente — sem ela, a tela
+não funciona, e nada cai num modo silenciosamente inseguro. Banco tem precedência sobre variável de
+ambiente quando os dois existem (é o "colar e já funciona" da tela). Toda revelação de chave salva
+(clique em "Revelar") e toda gravação/atualização geram registro de auditoria (quem, quando, quais
+campos — nunca o valor da chave em si no log). Ver `src/server/security/credentialsCrypto.ts`,
+`src/server/security/credentialsCache.ts` e `src/integrations/credenciaisCatalogo.ts`.
 
 **I11 — Toda ação destrutiva ou financeira exige `reason_code` de lista fechada + observação
 livre.** Não aceite apenas texto livre opcional. O código de motivo é o que permite medir

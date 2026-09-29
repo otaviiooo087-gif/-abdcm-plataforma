@@ -17,6 +17,7 @@ import { whatsAppProviderConfigurado } from './src/integrations/whatsapp/index';
 import { storageProviderConfigurado, caminhoLocalSeguro } from './src/integrations/storage/index';
 import { ocrProviderConfigurado } from './src/integrations/ocr/index';
 import { monitoramentoProviderConfigurado } from './src/integrations/monitoramento/index';
+import { bureauProviderConfigurado } from './src/integrations/bureau/index';
 import type { Registro, OrgaoBureau } from './src/domain/types';
 import { promises as fs } from 'node:fs';
 import { onEvento, type EventoTempoReal } from './src/server/eventBus';
@@ -62,6 +63,14 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 async function startServer() {
+  // Credenciais de integração salvas no banco (chave colada na tela de
+  // admin) precisam estar no cache em memória ANTES de qualquer provider
+  // real poder ser instanciado — senão o primeiro getXProvider() cairia em
+  // mock mesmo com chave configurada (ver src/server/security/credentialsCache.ts).
+  await serverStore.carregarCredenciaisIntegracaoCache().catch((err) => {
+    console.error('[credenciais-integracao] falha ao carregar cache na subida do servidor:', err);
+  });
+
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
@@ -1066,7 +1075,69 @@ async function startServer() {
       storage: { provider: 'r2', configurado: storageProviderConfigurado() },
       ocr: { provider: 'claude', configurado: ocrProviderConfigurado() },
       monitoramento: { provider: 'judit', configurado: monitoramentoProviderConfigurado() },
+      bureau: { provider: 'serasa', configurado: bureauProviderConfigurado() },
     });
+  });
+
+  // Chaves de API guardadas no banco, criptografadas (I10 revisado — ver
+  // CLAUDE.md seção 2). Admin-only: nunca retorna o valor real da chave,
+  // só status/metadados; revelar é uma rota separada, auditada (I6).
+  app.get('/api/admin/credenciais', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role !== 'administrador') {
+      res.status(403).json({ error: 'Apenas o administrador configura chaves de API.' });
+      return;
+    }
+    res.json(await serverStore.listarStatusCredenciais());
+  });
+
+  app.post('/api/admin/credenciais/:provider', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role !== 'administrador') {
+      res.status(403).json({ error: 'Apenas o administrador configura chaves de API.' });
+      return;
+    }
+    try {
+      const { valores, custoUnitarioCentavos, unidadeCusto } = req.body as {
+        valores: Record<string, string>;
+        custoUnitarioCentavos: number | null;
+        unidadeCusto: string | null;
+      };
+      await serverStore.salvarCredencialIntegracao(
+        req.params.provider,
+        valores ?? {},
+        custoUnitarioCentavos ?? null,
+        unidadeCusto ?? null,
+        session.id,
+      );
+      res.json(await serverStore.listarStatusCredenciais());
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao salvar credencial.' });
+    }
+  });
+
+  app.post('/api/admin/credenciais/:provider/revelar', async (req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role !== 'administrador') {
+      res.status(403).json({ error: 'Apenas o administrador revela chaves de API.' });
+      return;
+    }
+    try {
+      res.json(await serverStore.revelarCredencialIntegracao(req.params.provider, session.id));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Erro ao revelar credencial.' });
+    }
+  });
+
+  // Gasto por API — mesma restrição de admin (é custo operacional da
+  // associação, não dado de um associado).
+  app.get('/api/admin/gasto-api', async (_req: Request, res: Response) => {
+    const session = serverStore.getSession();
+    if (session.role !== 'administrador') {
+      res.status(403).json({ error: 'Apenas o administrador vê o gasto por API.' });
+      return;
+    }
+    res.json(await serverStore.obterGastoApiPorProvider());
   });
 
   // 6.6.1 Dados cadastrais da empresa (Configurações > Empresa)
@@ -1545,6 +1616,15 @@ async function startServer() {
       .reconciliarMonitoramentoPendente()
       .catch((err) => console.error('[reconciliacao-monitoramento] falha na rodada:', err));
   }, INTERVALO_RECONCILIACAO_MONITORAMENTO_MS);
+
+  // Consulta de baixa via Serasa — mesma cadência espaçada do monitoramento
+  // processual (não é o caminho principal, que continua sendo o arquivo de
+  // retorno do escritório jurídico ou a baixa manual; isso só antecipa
+  // quando o provedor real detectar antes).
+  const INTERVALO_RECONCILIACAO_BUREAU_MS = 30 * 60 * 1000; // 30 minutos
+  setInterval(() => {
+    serverStore.reconciliarBureauPendente().catch((err) => console.error('[reconciliacao-bureau] falha na rodada:', err));
+  }, INTERVALO_RECONCILIACAO_BUREAU_MS);
 }
 
 startServer();

@@ -1,4 +1,5 @@
 import type { PixProvider, CriarCobrancaInput, CobrancaCriada, StatusCobranca, EventoPagamento } from './PixProvider.js';
+import { valorCredencial } from '../credencialResolver.js';
 
 // Integração real com a API do Asaas (https://docs.asaas.com).
 //
@@ -35,7 +36,7 @@ function baseUrl(): string {
 }
 
 async function asaasFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const apiKey = process.env.ASAAS_API_KEY;
+  const apiKey = valorCredencial('pix_asaas', 'ASAAS_API_KEY');
   if (!apiKey) throw new Error('ASAAS_API_KEY ausente — configure a variável de ambiente.');
 
   const res = await fetch(`${baseUrl()}${path}`, {

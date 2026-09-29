@@ -361,3 +361,26 @@ export const processoMovimentacoes = pgTable('processo_movimentacoes', {
   origem: text('origem').notNull().default('webhook'),
   criadoEm: timestamp('criado_em', { withTimezone: true, mode: 'string' }).notNull(),
 })
+
+export const credenciaisIntegracao = pgTable('credenciais_integracao', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  provider: text('provider').notNull(),
+  dadosCriptografados: text('dados_criptografados').notNull(),
+  chaves: text('chaves').array().notNull(),
+  custoUnitarioCentavos: integer('custo_unitario_centavos'),
+  unidadeCusto: text('unidade_custo'),
+  atualizadoEm: timestamp('atualizado_em', { withTimezone: true, mode: 'string' }).notNull(),
+  atualizadoPor: text('atualizado_por').notNull(),
+  criadoEm: timestamp('criado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})
+
+export const apiUso = pgTable('api_uso', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  provider: text('provider').notNull(),
+  operacao: text('operacao').notNull(),
+  custoCentavos: integer('custo_centavos').notNull().default(0),
+  referenciaId: text('referencia_id'),
+  criadoEm: timestamp('criado_em', { withTimezone: true, mode: 'string' }).notNull(),
+})

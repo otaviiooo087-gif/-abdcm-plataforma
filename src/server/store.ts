@@ -44,6 +44,8 @@ import type {
   ChamadaConfig,
   ChamadaLog,
   MovimentacaoProcesso,
+  CredencialIntegracaoStatus,
+  GastoApiPorProvider,
 } from '../domain/types.js';
 import { getLigacaoProvider } from '../integrations/ligacao/index.js';
 import { ORGAOS_BUREAU } from '../domain/types.js';
@@ -53,10 +55,14 @@ import { maskDocument, formatDocumentFull } from '../lib/masking/documentMasker.
 import { getPixProvider, pixProviderConfigurado } from '../integrations/pix/index.js';
 import { getStorageProvider, storageProviderConfigurado } from '../integrations/storage/index.js';
 import { getWhatsAppProvider, whatsAppProviderConfigurado } from '../integrations/whatsapp/index.js';
-import { getOcrProvider } from '../integrations/ocr/index.js';
+import { getOcrProvider, ocrProviderConfigurado } from '../integrations/ocr/index.js';
 import { gerarFichaAssociativaPdf } from '../domain/associados/ficha.js';
 import { emitirEvento } from './eventBus.js';
 import { getMonitoramentoProvider, monitoramentoProviderConfigurado } from '../integrations/monitoramento/index.js';
+import { getBureauProvider, bureauProviderConfigurado } from '../integrations/bureau/index.js';
+import { CATALOGO_INTEGRACOES, definicaoIntegracao } from '../integrations/credenciaisCatalogo.js';
+import { criptografarValores, descriptografarValores } from './security/credentialsCrypto.js';
+import { definirCredencialCache } from './security/credentialsCache.js';
 import { hashPassword, verifyPassword } from './auth/password.js';
 import { criarTokenSessao } from './auth/session.js';
 import { sessaoRealAtual } from './auth/context.js';
@@ -656,6 +662,7 @@ async function criarCobrancaPix(submissao: Submissao): Promise<PixCobranca> {
     expiraEmSegundos: PIX_EXPIRACAO_SEGUNDOS,
     descricao: `ABDCM — ${submissao.nomes_count} nome(s) na Ação Coletiva`,
   });
+  await registrarCustoApi('pix_asaas', 'criar_cobranca', submissao.id);
 
   const id = novoId('pix');
   const now = new Date().toISOString();
@@ -2054,6 +2061,7 @@ async function iniciarMonitoramentoProcesso(loteId: string): Promise<void> {
       numeroProcesso: lote.numeroProcesso,
       callbackUrl: baseUrl ? `${baseUrl.replace(/\/$/, '')}/api/webhooks/monitoramento-processo` : '',
     });
+    await registrarCustoApi('monitoramento_judit', 'criar_monitoramento', loteId);
     await db().update(schema.lotes).set({ juditTrackingId: trackingId }).where(eq(schema.lotes.id, loteId));
   } catch (err) {
     console.error(`[monitoramento-processual] falha ao abrir monitoramento pro lote ${loteId}:`, err);
@@ -2135,6 +2143,7 @@ async function reconciliarMonitoramentoPendente(): Promise<ResultadoReconciliaca
   for (const lote of lotesMonitorados) {
     try {
       const movimentacoes = await provider.consultarMovimentacoes(lote.juditTrackingId!);
+      await registrarCustoApi('monitoramento_judit', 'consultar_movimentacoes', lote.id);
       novasMovimentacoes += await registrarMovimentacoesProcesso(lote.id, lote.tenantId, movimentacoes, 'reconciliacao');
     } catch (err) {
       console.error(`[reconciliarMonitoramentoPendente] falha ao consultar lote ${lote.id}:`, err);
@@ -2152,6 +2161,259 @@ async function getMovimentacoesProcesso(loteId: string): Promise<MovimentacaoPro
     .where(eq(schema.processoMovimentacoes.loteId, loteId))
     .orderBy(desc(schema.processoMovimentacoes.criadoEm));
   return linhas.map(movimentacaoProcessoDeLinha);
+}
+
+// ---------------------------------------------------------------------
+// Consulta de baixa via Serasa (via API real — ver src/integrations/bureau).
+// Read-only: pra cada registro protocolado com o órgão "serasa" ainda
+// pendente, pergunta ao provedor se a restrição ainda está ativa. Quando
+// não estiver mais, a baixa entra pelo MESMO caminho da baixa manual —
+// marcarOrgaoBaixado() — que já gera ProcessEvent (I2) e, se for o último
+// órgão pendente, transiciona o registro inteiro. Sem provedor real
+// configurado, o mock sempre responde "ainda ativa" (nunca inventa baixa).
+// ---------------------------------------------------------------------
+
+export interface ResultadoReconciliacaoBureau {
+  verificados: number;
+  baixasDetectadas: number;
+}
+
+async function reconciliarBureauPendente(): Promise<ResultadoReconciliacaoBureau> {
+  const pendentes = await db()
+    .select({
+      orgaoId: schema.registroOrgaos.id,
+      registroId: schema.registroOrgaos.registroId,
+      associadoId: schema.registros.associadoId,
+      processStatus: schema.registros.processStatus,
+    })
+    .from(schema.registroOrgaos)
+    .innerJoin(schema.registros, eq(schema.registros.id, schema.registroOrgaos.registroId))
+    .where(and(eq(schema.registroOrgaos.orgao, 'serasa'), eq(schema.registroOrgaos.status, 'pendente')));
+
+  const relevantes = pendentes.filter((p) => p.processStatus === 'protocolado');
+  if (relevantes.length === 0) return { verificados: 0, baixasDetectadas: 0 };
+
+  const provider = getBureauProvider();
+  let baixasDetectadas = 0;
+
+  for (const p of relevantes) {
+    try {
+      const [associado] = await db().select().from(schema.associados).where(eq(schema.associados.id, p.associadoId));
+      if (!associado) continue;
+
+      const status = await provider.consultarStatus({ cpfCnpj: associado.cpfCnpjRaw });
+      await registrarCustoApi('bureau_serasa', 'consultar_status', p.registroId);
+
+      if (!status.restricaoAtiva) {
+        await marcarOrgaoBaixado(p.registroId, 'serasa', 'system');
+        baixasDetectadas += 1;
+      }
+    } catch (err) {
+      console.error(`[reconciliarBureauPendente] falha ao consultar registro ${p.registroId}:`, err);
+    }
+  }
+
+  return { verificados: relevantes.length, baixasDetectadas };
+}
+
+// ---------------------------------------------------------------------
+// Credenciais de integração (chave de API guardada no banco, criptografada
+// — I10 revisado, ver CLAUDE.md seção 2) e custo por chamada de API paga.
+// ---------------------------------------------------------------------
+
+const CONFIGURADO_POR_PROVIDER: Record<string, () => boolean> = {
+  pix_asaas: pixProviderConfigurado,
+  whatsapp_zapi: whatsAppProviderConfigurado,
+  storage_r2: storageProviderConfigurado,
+  ocr_claude: ocrProviderConfigurado,
+  monitoramento_judit: monitoramentoProviderConfigurado,
+  bureau_serasa: bureauProviderConfigurado,
+};
+
+/** Carrega as credenciais salvas no banco pro cache em memória (src/server/security/credentialsCache)
+ * — chamado na subida do servidor, antes de qualquer provider real poder ser instanciado. */
+async function carregarCredenciaisIntegracaoCache(): Promise<void> {
+  const linhas = await db().select().from(schema.credenciaisIntegracao).where(eq(schema.credenciaisIntegracao.tenantId, ABDCM_TENANT_ID));
+  for (const linha of linhas) {
+    try {
+      definirCredencialCache(linha.provider, descriptografarValores(linha.dadosCriptografados));
+    } catch (err) {
+      console.error(`[credenciais-integracao] falha ao decifrar credencial do provedor "${linha.provider}":`, err);
+    }
+  }
+}
+
+async function listarStatusCredenciais(): Promise<CredencialIntegracaoStatus[]> {
+  const linhas = await db().select().from(schema.credenciaisIntegracao).where(eq(schema.credenciaisIntegracao.tenantId, ABDCM_TENANT_ID));
+  const porProvider = new Map(linhas.map((l) => [l.provider, l]));
+
+  return CATALOGO_INTEGRACOES.map((def) => {
+    const linha = porProvider.get(def.provider);
+    const configurado = CONFIGURADO_POR_PROVIDER[def.provider]?.() ?? false;
+    const origem: CredencialIntegracaoStatus['origem'] = linha ? 'banco' : configurado ? 'ambiente' : 'nenhum';
+    return {
+      provider: def.provider,
+      nome: def.nome,
+      categoria: def.categoria,
+      campos: def.campos,
+      origem,
+      configurado,
+      atualizadoEm: linha?.atualizadoEm ?? null,
+      atualizadoPor: linha?.atualizadoPor ?? null,
+      custoUnitarioCentavos: linha?.custoUnitarioCentavos ?? null,
+      unidadeCusto: linha?.unidadeCusto ?? def.unidadeCustoPadrao,
+    };
+  });
+}
+
+/** Salva (cria ou atualiza) a credencial de um provedor — criptografada no banco, cache
+ * atualizado na hora (I10 revisado). Só campos preenchidos são gravados; nenhum valor
+ * real de chave aparece em log, resposta de API ou auditoria — só os nomes dos campos. */
+async function salvarCredencialIntegracao(
+  provider: string,
+  valores: Record<string, string>,
+  custoUnitarioCentavos: number | null,
+  unidadeCusto: string | null,
+  atorUserId: string,
+): Promise<void> {
+  const def = definicaoIntegracao(provider);
+  if (!def) throw new Error(`Integração desconhecida: "${provider}".`);
+
+  const faltando = def.campos.filter((c) => c.obrigatorio && !valores[c.chave]?.trim());
+  if (faltando.length > 0) {
+    throw new Error(`Campo obrigatório ausente: ${faltando.map((c) => c.rotulo).join(', ')}.`);
+  }
+
+  const valoresLimpos: Record<string, string> = {};
+  const chavesPreenchidas: string[] = [];
+  for (const campo of def.campos) {
+    const v = valores[campo.chave]?.trim();
+    if (v) {
+      valoresLimpos[campo.chave] = v;
+      chavesPreenchidas.push(campo.chave);
+    }
+  }
+  if (chavesPreenchidas.length === 0) throw new Error('Nenhum campo preenchido.');
+
+  const dadosCriptografados = criptografarValores(valoresLimpos);
+  const now = new Date().toISOString();
+
+  const [existente] = await db()
+    .select({ id: schema.credenciaisIntegracao.id })
+    .from(schema.credenciaisIntegracao)
+    .where(and(eq(schema.credenciaisIntegracao.tenantId, ABDCM_TENANT_ID), eq(schema.credenciaisIntegracao.provider, provider)));
+
+  if (existente) {
+    await db()
+      .update(schema.credenciaisIntegracao)
+      .set({
+        dadosCriptografados,
+        chaves: chavesPreenchidas,
+        custoUnitarioCentavos,
+        unidadeCusto,
+        atualizadoEm: now,
+        atualizadoPor: atorUserId,
+      })
+      .where(eq(schema.credenciaisIntegracao.id, existente.id));
+  } else {
+    await db().insert(schema.credenciaisIntegracao).values({
+      id: novoId('cred'),
+      tenantId: ABDCM_TENANT_ID,
+      provider,
+      dadosCriptografados,
+      chaves: chavesPreenchidas,
+      custoUnitarioCentavos,
+      unidadeCusto,
+      atualizadoEm: now,
+      atualizadoPor: atorUserId,
+      criadoEm: now,
+    });
+  }
+
+  definirCredencialCache(provider, valoresLimpos);
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: ABDCM_TENANT_ID,
+    atorUserId,
+    acao: 'CONFIGURACAO_CREDENCIAL_API',
+    entidadeTipo: 'credenciais_integracao',
+    entidadeId: provider,
+    depois: { chaves: chavesPreenchidas, custoUnitarioCentavos, unidadeCusto },
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: now,
+  });
+}
+
+/** Revelação de credencial sob clique, com registro de auditoria obrigatório (I6, mesmo padrão de revealDocument/revealAssociadoCpf). */
+async function revelarCredencialIntegracao(provider: string, atorUserId: string): Promise<Record<string, string>> {
+  const [linha] = await db()
+    .select()
+    .from(schema.credenciaisIntegracao)
+    .where(and(eq(schema.credenciaisIntegracao.tenantId, ABDCM_TENANT_ID), eq(schema.credenciaisIntegracao.provider, provider)));
+  if (!linha) throw new Error('Nenhuma credencial salva no banco pra esse provedor.');
+
+  const valores = descriptografarValores(linha.dadosCriptografados);
+
+  await db().insert(schema.auditLog).values({
+    id: novoId('audit'),
+    tenantId: ABDCM_TENANT_ID,
+    atorUserId,
+    acao: 'REVELACAO_CREDENCIAL_API',
+    entidadeTipo: 'credenciais_integracao',
+    entidadeId: provider,
+    ip: '127.0.0.1',
+    userAgent: 'ABDCM-Admin-Console',
+    ocorridoEm: new Date().toISOString(),
+  });
+
+  return valores;
+}
+
+/** Registra uma chamada paga a uma API externa, pelo custo unitário configurado (0 se
+ * ainda não configurado — nunca fabricado). Melhor-esforço: uma falha aqui nunca pode
+ * derrubar a chamada de API que já aconteceu de verdade (mesma postura de emitirEvento). */
+async function registrarCustoApi(provider: string, operacao: string, referenciaId?: string | null): Promise<void> {
+  try {
+    const [cred] = await db()
+      .select({ custoUnitarioCentavos: schema.credenciaisIntegracao.custoUnitarioCentavos })
+      .from(schema.credenciaisIntegracao)
+      .where(and(eq(schema.credenciaisIntegracao.tenantId, ABDCM_TENANT_ID), eq(schema.credenciaisIntegracao.provider, provider)));
+
+    await db().insert(schema.apiUso).values({
+      id: novoId('apiuso'),
+      tenantId: ABDCM_TENANT_ID,
+      provider,
+      operacao,
+      custoCentavos: cred?.custoUnitarioCentavos ?? 0,
+      referenciaId: referenciaId ?? null,
+      criadoEm: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error(`[registrarCustoApi] falha ao registrar custo (${provider}/${operacao}):`, err);
+  }
+}
+
+async function obterGastoApiPorProvider(): Promise<GastoApiPorProvider[]> {
+  const [usos, credenciais] = await Promise.all([
+    db().select().from(schema.apiUso).where(eq(schema.apiUso.tenantId, ABDCM_TENANT_ID)),
+    db().select().from(schema.credenciaisIntegracao).where(eq(schema.credenciaisIntegracao.tenantId, ABDCM_TENANT_ID)),
+  ]);
+  const credPorProvider = new Map(credenciais.map((c) => [c.provider, c]));
+
+  return CATALOGO_INTEGRACOES.map((def) => {
+    const doProvider = usos.filter((u) => u.provider === def.provider);
+    const cred = credPorProvider.get(def.provider);
+    return {
+      provider: def.provider,
+      nome: def.nome,
+      chamadas: doProvider.length,
+      custo_total_centavos: doProvider.reduce((soma, u) => soma + u.custoCentavos, 0),
+      custo_unitario_centavos: cred?.custoUnitarioCentavos ?? null,
+      unidade_custo: cred?.unidadeCusto ?? def.unidadeCustoPadrao,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -2347,6 +2609,7 @@ async function dispararMarketingServico(
     if (!a.telefoneWhatsapp) continue;
     try {
       await getWhatsAppProvider().enviarTexto({ telefone: a.telefoneWhatsapp, texto: mensagem.trim() });
+      await registrarCustoApi('whatsapp_zapi', 'enviar_texto', a.id);
       enviados += 1;
     } catch (err) {
       falhas += 1;
@@ -3378,6 +3641,7 @@ async function gerarFichaAssociativaAutomatica(
   const documentoBytes = await respostaDocumento.arrayBuffer();
 
   const lido = await getOcrProvider().lerDocumento({ documentoUrl, mimeType });
+  await registrarCustoApi('ocr_claude', 'ler_documento', associadoId);
 
   const pdfBytes = await gerarFichaAssociativaPdf({
     nome: associado.nome,
@@ -3696,6 +3960,7 @@ async function encerrarLote(loteId: string, atorUserId: string): Promise<Resulta
       for (const telefone of numeros) {
         try {
           await getWhatsAppProvider().enviarTexto({ telefone, texto: mensagem });
+          await registrarCustoApi('whatsapp_zapi', 'enviar_texto', loteId);
           whatsappEnviadoPara += 1;
         } catch (err) {
           console.error(`[encerrarLote] falha ao enviar WhatsApp de encerramento para ${telefone}:`, err);
@@ -3757,6 +4022,12 @@ export const serverStore = {
   processarWebhookMonitoramentoProcesso,
   reconciliarMonitoramentoPendente,
   getMovimentacoesProcesso,
+  reconciliarBureauPendente,
+  carregarCredenciaisIntegracaoCache,
+  listarStatusCredenciais,
+  salvarCredencialIntegracao,
+  revelarCredencialIntegracao,
+  obterGastoApiPorProvider,
   getServicos,
   createServico,
   dispararMarketingServico,
